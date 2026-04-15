@@ -4,6 +4,7 @@ import uuid
 import pandas as pd
 import urllib.parse
 from datetime import datetime, timedelta, date
+from pathlib import Path
 
 st.set_page_config(page_title="Gestão de Férias", layout="wide")
 
@@ -102,25 +103,78 @@ def init_db():
 # IMPORTAÇÃO EXCEL
 # ------------------------
 
+def importar_equipe():
+    try:
+        caminho_csv = Path("base_ferias.csv")
+        caminho_xlsx = Path("base_ferias.xlsx")
+
+        if caminho_csv.exists():
+            df = pd.read_csv(caminho_csv)
+        elif caminho_xlsx.exists():
+            df = pd.read_excel(caminho_xlsx)
+        else:
+            return
+
+        if df.empty:
+            return
+
+        expected_columns = {"nome", "telefone", "email", "cargo"}
+        if not expected_columns.issubset(set(df.columns)):
+            return
+
+        conn = get_conn()
+        c = conn.cursor()
+
+        for _, row in df.iterrows():
+            nome = str(row.get("nome", "")).strip()
+            telefone = str(row.get("telefone", "")).strip()
+            email = str(row.get("email", "")).strip()
+            cargo = str(row.get("cargo", "")).strip()
+
+            if not nome:
+                continue
+
+            c.execute(
+                """
+                INSERT OR IGNORE INTO colaboradores (nome, telefone, email, cargo)
+                VALUES (?, ?, ?, ?)
+                """,
+                (nome, telefone, email, cargo),
+            )
+
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        st.warning(f"Erro ao importar equipe: {e}")
+
+
 def init_controle_ferias():
     conn = get_conn()
     c = conn.cursor()
+
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS controle_ferias (
+        colaborador_id INTEGER PRIMARY KEY,
+        saldo_total INTEGER DEFAULT 30,
+        saldo_utilizado INTEGER DEFAULT 0
+    )
+    """)
 
     c.execute("SELECT id FROM colaboradores")
     colaboradores = c.fetchall()
 
     for col in colaboradores:
-        c.execute("""
+        c.execute(
+            """
             INSERT OR IGNORE INTO controle_ferias 
             (colaborador_id, saldo_total, saldo_utilizado)
             VALUES (?, 30, 0)
-        """, (col[0],))
+            """,
+            (col[0],),
+        )
 
     conn.commit()
-    conn.close()  
-
-    except Exception as e:
-        st.error(f"Erro Excel: {e}")
+    conn.close()
 
 # ------------------------
 # VALIDAÇÕES
@@ -144,38 +198,9 @@ def validar_janela(data):
         return True
     return False
 
-# ------------------------# SALDO DE FÉRIAS
 # ------------------------
-
-def init_controle_ferias():
-    conn = get_conn()
-    c = conn.cursor()
-
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS controle_ferias (
-        colaborador_id INTEGER PRIMARY KEY,
-        saldo_total INTEGER DEFAULT 30,
-        saldo_utilizado INTEGER DEFAULT 0
-    )
-    """)
-
-    c.execute("SELECT id FROM colaboradores")
-    colaboradores = c.fetchall()
-
-    for col in colaboradores:
-        c.execute("SELECT id FROM colaboradores")
-colaboradores = c.fetchall()
-
-for col in colaboradores:
-    c.execute("""
-        INSERT OR IGNORE INTO controle_ferias 
-        (colaborador_id, saldo_total, saldo_utilizado)
-        VALUES (?, 30, 0)
-    """, (col[0],))
-
-    conn.commit()
-    conn.close()
-
+# SALDO DE FÉRIAS
+# ------------------------
 
 def get_saldo_restante(colaborador_id):
     conn = get_conn()
@@ -280,8 +305,9 @@ init_db()
 importar_equipe()
 init_controle_ferias()
 
-BASE_URL = st.secrets.get("BASE_URL","http://localhost:8501")
-token = st.query_params.get("token")
+BASE_URL = st.secrets.get("BASE_URL", "http://localhost:8501")
+query_params = st.experimental_get_query_params()
+token = query_params.get("token", [None])[0]
 
 # ------------------------
 # FUNCIONÁRIO
