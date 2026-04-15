@@ -5,9 +5,6 @@ import pandas as pd
 import urllib.parse
 from datetime import datetime, timedelta, date
 
-from ferias import EQUIPE, LIMITES_EQUIPE
-
-# deploy refresh - force Streamlit Cloud update
 st.set_page_config(page_title="Gestão de Férias", layout="wide")
 
 # ------------------------
@@ -15,7 +12,6 @@ st.set_page_config(page_title="Gestão de Férias", layout="wide")
 # ------------------------
 
 def easter_date(year):
-    """Calcula a data da Páscoa usando o algoritmo de Meeus."""
     a = year % 19
     b = year // 100
     c = year % 100
@@ -33,37 +29,22 @@ def easter_date(year):
     return date(year, month, day)
 
 def get_feriados(ano):
-    """Retorna lista de feriados no formato YYYY-MM-DD para o ano especificado."""
     feriados = []
+    fixos = [(1,1),(4,21),(5,1),(9,7),(10,12),(11,2),(11,15),(12,25)]
+    for m,d in fixos:
+        feriados.append(date(ano,m,d))
 
-    # Feriados fixos
-    feriados_fixos = [
-        (1, 1),   # Ano Novo
-        (4, 21),  # Tiradentes
-        (5, 1),   # Dia do Trabalho
-        (9, 7),   # Independência
-        (10, 12), # Nossa Senhora Aparecida
-        (11, 2),  # Finados
-        (11, 15), # Proclamação da República
-        (12, 25)  # Natal
+    pascoa = easter_date(ano)
+    feriados += [
+        pascoa - timedelta(days=2),
+        pascoa - timedelta(days=47),
+        pascoa + timedelta(days=60)
     ]
 
-    for mes, dia in feriados_fixos:
-        feriados.append(date(ano, mes, dia))
-
-    # Feriados móveis baseados na Páscoa
-    pascoa = easter_date(ano)
-    sexta_santa = pascoa - timedelta(days=2)
-    carnaval = pascoa - timedelta(days=47)
-    corpus_christi = pascoa + timedelta(days=60)
-
-    feriados.extend([sexta_santa, carnaval, corpus_christi])
-
-    # Retornar como strings YYYY-MM-DD
     return [d.strftime("%Y-%m-%d") for d in feriados]
 
 # ------------------------
-# BANCO DE DADOS
+# BANCO
 # ------------------------
 
 def get_conn():
@@ -73,50 +54,44 @@ def init_db():
     conn = get_conn()
     c = conn.cursor()
 
-    # Tabela de colaboradores
     c.execute("""
     CREATE TABLE IF NOT EXISTS colaboradores (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nome TEXT UNIQUE NOT NULL,
-        telefone TEXT
+        nome TEXT UNIQUE,
+        telefone TEXT,
+        email TEXT,
+        cargo TEXT
     )
     """)
 
-    # Tabela de tokens para links únicos
     c.execute("""
     CREATE TABLE IF NOT EXISTS tokens (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        colaborador_id INTEGER NOT NULL,
-        token TEXT UNIQUE NOT NULL,
-        usado INTEGER DEFAULT 0,
-        criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (colaborador_id) REFERENCES colaboradores (id)
+        colaborador_id INTEGER,
+        token TEXT,
+        usado INTEGER DEFAULT 0
     )
     """)
 
-    # Tabela de solicitações de férias
     c.execute("""
     CREATE TABLE IF NOT EXISTS solicitacoes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        colaborador_id INTEGER NOT NULL,
-        data_inicio TEXT NOT NULL,
-        dias INTEGER NOT NULL,
-        tipo_divisao TEXT NOT NULL,
+        colaborador_id INTEGER,
+        data_inicio TEXT,
+        dias INTEGER,
+        tipo_divisao TEXT,
         status TEXT DEFAULT 'PENDENTE',
         tem_conflito INTEGER DEFAULT 0,
-        criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
-        data_aprovacao TEXT,
-        motivo_rejeicao TEXT,
-        FOREIGN KEY (colaborador_id) REFERENCES colaboradores (id)
+        data_aprovacao TEXT
     )
     """)
 
-    # Tabela de controle de saldo de férias
     c.execute("""
     CREATE TABLE IF NOT EXISTS controle_ferias (
         colaborador_id INTEGER PRIMARY KEY,
-        saldo INTEGER DEFAULT 30,
-        FOREIGN KEY (colaborador_id) REFERENCES colaboradores (id)
+        saldo_total INTEGER DEFAULT 30,
+        saldo_utilizado INTEGER DEFAULT 0,
+        FOREIGN KEY (colaborador_id) REFERENCES colaboradores(id)
     )
     """)
 
@@ -124,1086 +99,390 @@ def init_db():
     conn.close()
 
 # ------------------------
-# IMPORTAÇÃO DE DADOS
+# IMPORTAÇÃO EXCEL
 # ------------------------
 
 def importar_equipe():
-    """Importa equipe do ferias.py para o banco."""
-    conn = get_conn()
-    c = conn.cursor()
-
-    c.execute("DELETE FROM colaboradores")
-
-    for nome in EQUIPE.keys():
-        c.execute(
-            "INSERT OR IGNORE INTO colaboradores (nome) VALUES (?)",
-            (nome,)
-        )
-
-    conn.commit()
-    conn.close()
-
-def importar_controle():
-    """Importa saldos de férias da planilha Excel."""
     try:
-        df = pd.read_excel("ferias_equipe.xlsx", sheet_name="controle de ferias")
+        df = pd.read_excel("ferias_equipe.xlsx")
+
         conn = get_conn()
         c = conn.cursor()
 
-        c.execute("DELETE FROM controle_ferias")
+        c.execute("DELETE FROM colaboradores")
 
         for _, row in df.iterrows():
-            nome = row.get("Nome")
-            saldo = row.get("Saldo", 30)
+            nome = str(row.get("Nome_Completo","")).strip()
+            telefone = str(row.get("Telefone","")).strip()
+            email = str(row.get("Email","")).strip()
+            cargo = str(row.get("Cargo","")).strip()
 
-            # Buscar ID do colaborador
-            c.execute("SELECT id FROM colaboradores WHERE nome = ?", (nome,))
-            result = c.fetchone()
-
-            if result:
-                colaborador_id = result[0]
+            if nome:
                 c.execute("""
-                    INSERT INTO controle_ferias (colaborador_id, saldo)
-                    VALUES (?, ?)
-                """, (colaborador_id, saldo))
+                    INSERT INTO colaboradores (nome, telefone, email, cargo)
+                    VALUES (?, ?, ?, ?)
+                """, (nome, telefone, email, cargo))
 
         conn.commit()
         conn.close()
-        st.success("Controle de férias importado com sucesso!")
+        init_controle_ferias()
 
     except Exception as e:
-        st.error(f"Erro ao importar controle: {e}")
+        st.error(f"Erro Excel: {e}")
 
 # ------------------------
 # VALIDAÇÕES
 # ------------------------
 
-def validar_janela_ferias(data_inicio):
-    """Valida se a data está na janela permitida."""
-    mes = data_inicio.month
-    dia = data_inicio.day
-
-    # Janela 1: 01/06 até 15/07
-    if (mes == 6 and dia >= 1) or (mes == 7 and dia <= 15):
-        return True, "Janela de férias válida (01/06 - 15/07)."
-
-    # Janela 2: 01/09 até 30/03 (considerando virada de ano)
-    if mes in [9, 10, 11, 12] or mes in [1, 2] or (mes == 3 and dia <= 30):
-        return True, "Janela de férias válida (01/09 - 30/03)."
-
-    return False, "Data fora da janela permitida (01/06-15/07 ou 01/09-30/03)."
-
 def validar_data_inicio(data_inicio):
-    """Valida regras de data de início."""
-    # Não pode ser sexta-feira
-    if data_inicio.weekday() == 4:  # 0=seg, 1=ter, 2=qua, 3=qui, 4=sex, 5=sab, 6=dom
-        return False, "Data de início não pode ser sexta-feira."
+    if data_inicio.weekday() == 4:
+        return False, "Não pode iniciar sexta-feira"
 
-    # Não pode ser véspera de feriado
-    ano = data_inicio.year
-    feriados = get_feriados(ano)
-    dia_seguinte = data_inicio + timedelta(days=1)
-    dia_seguinte_str = dia_seguinte.strftime("%Y-%m-%d")
+    feriados = get_feriados(data_inicio.year)
+    if (data_inicio + timedelta(days=1)).strftime("%Y-%m-%d") in feriados:
+        return False, "Véspera de feriado"
 
-    if dia_seguinte_str in feriados:
-        return False, f"Data de início não pode ser véspera de feriado ({dia_seguinte_str})."
+    return True, ""
 
-    return True, "Data de início válida."
+def validar_janela(data):
+    m,d = data.month, data.day
+    if (m==6 and d>=1) or (m==7 and d<=15):
+        return True
+    if m in [9,10,11,12,1,2] or (m==3 and d<=30):
+        return True
+    return False
 
-def validar_periodo(dias):
-    """Valida se o período é permitido."""
-    if dias not in [15, 20, 30]:
-        return False, "Período inválido. Apenas 15, 20 ou 30 dias são permitidos."
-    return True, "Período válido."
+# ------------------------# SALDO DE FÉRIAS
+# ------------------------
 
-def validar_divisao(tipo_divisao, dias):
-    """Valida se a divisão corresponde aos dias informados."""
-    mapeamento = {
-        "30 dias": 30,
-        "15 + 15 dias": 15,
-        "20 + 10 dias": 20
-    }
-
-    esperado = mapeamento.get(tipo_divisao)
-    if esperado is None:
-        return False, "Tipo de divisão inválido."
-
-    if dias != esperado:
-        return False, f"Para '{tipo_divisao}', deve solicitar {esperado} dias."
-
-    return True, "Divisão válida."
-
-def validar_solicitacao(nome, data_inicio, dias, colaborador_id=None):
-    """Validação final usando regras de negócio."""
-    if nome not in EQUIPE:
-        return False, "Funcionário não encontrado na equipe."
-
-    if dias < 5:
-        return False, "Mínimo de 5 dias de férias."
-
-    if dias > 30:
-        return False, "Máximo de 30 dias de férias."
-
-    # Verificar safra (16/07 a 31/08)
-    if (data_inicio.month == 7 and data_inicio.day > 15) or data_inicio.month == 8:
-        return False, "Período bloqueado durante safra (16/07 - 31/08)."
-
-    # Verificar saldo
+def init_controle_ferias():
     conn = get_conn()
-    df = pd.read_sql("""
-        SELECT saldo FROM controle_ferias
-        WHERE colaborador_id = (
-            SELECT id FROM colaboradores WHERE nome = ?
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS controle_ferias (
+            colaborador_id INTEGER PRIMARY KEY,
+            saldo_total INTEGER DEFAULT 30,
+            saldo_utilizado INTEGER DEFAULT 0,
+            FOREIGN KEY (colaborador_id) REFERENCES colaboradores(id)
         )
-    """, conn, params=(nome,))
-    conn.close()
-
-    if not df.empty:
-        saldo = df.iloc[0]["saldo"]
-        if dias > saldo:
-            return False, f"Saldo insuficiente. Disponível: {saldo} dias."
-
-    # Verificar conflito de equipe (se colaborador_id fornecido)
-    if colaborador_id:
-        conflito, msg_conflito = verificar_conflito_equipe(data_inicio, dias, colaborador_id)
-        if conflito:
-            return False, msg_conflito
-
-    return True, "Solicitação válida."
-
-# ------------------------
-# APROVAÇÃO GERENCIAL
-# ------------------------
-
-def aprovar_solicitacao(solicitacao_id):
-    """Aprova uma solicitação de férias pendente."""
-    conn = get_conn()
-    c = conn.cursor()
-    
+    """)
     c.execute("""
-        UPDATE solicitacoes
-        SET status = 'APROVADO', data_aprovacao = ?
-        WHERE id = ?
-    """, (datetime.now().isoformat(), solicitacao_id))
-    
+        INSERT OR IGNORE INTO controle_ferias (colaborador_id, saldo_total, saldo_utilizado)
+        SELECT id, 30, 0 FROM colaboradores
+    """)
     conn.commit()
     conn.close()
-    return True, "Solicitação aprovada com sucesso!"
 
-def reprovar_solicitacao(solicitacao_id, motivo):
-    """Reprova uma solicitação de férias pendente."""
+
+def get_saldo_restante(colaborador_id):
     conn = get_conn()
-    c = conn.cursor()
-    
-    c.execute("""
-        UPDATE solicitacoes
-        SET status = 'REPROVADO', motivo_rejeicao = ?
-        WHERE id = ?
-    """, (motivo, solicitacao_id))
-    
+    df = pd.read_sql(
+        "SELECT saldo_total, saldo_utilizado FROM controle_ferias WHERE colaborador_id = ?",
+        conn,
+        params=(colaborador_id,)
+    )
+    conn.close()
+    if df.empty:
+        return 30
+    row = df.iloc[0]
+    return int(row["saldo_total"] - row["saldo_utilizado"])
+
+
+def incrementar_saldo_utilizado(colaborador_id, dias):
+    conn = get_conn()
+    conn.execute("""
+        UPDATE controle_ferias
+        SET saldo_utilizado = saldo_utilizado + ?
+        WHERE colaborador_id = ?
+    """, (dias, colaborador_id))
     conn.commit()
     conn.close()
-    return True, "Solicitação reprovada."
 
 # ------------------------
 # NOTIFICAÇÕES
 # ------------------------
 
-def gerar_link_whatsapp(mensagem):
-    """Gera link para WhatsApp com mensagem codificada."""
-    return "https://wa.me/?text=" + urllib.parse.quote(mensagem)
+def gerar_link_whatsapp(telefone, mensagem):
+    telefone_formatado = str(telefone).strip()
+    if telefone_formatado.startswith("0"):
+        telefone_formatado = telefone_formatado[1:]
+    if telefone_formatado and not telefone_formatado.startswith("55"):
+        telefone_formatado = f"55{telefone_formatado}"
+    mensagem_codificada = urllib.parse.quote(mensagem)
+    if telefone_formatado:
+        return f"https://wa.me/{telefone_formatado}?text={mensagem_codificada}"
+    return f"https://wa.me/?text={mensagem_codificada}"
+
+
+def enviar_email(destino, assunto, mensagem):
+    return {
+        "destino": destino,
+        "assunto": assunto,
+        "mensagem": mensagem,
+        "status": "pronto"
+    }
+
+# ------------------------# CONFLITO
+# ------------------------
+
+def verificar_alerta(colaborador_id, data_inicio, dias):
+    conn = get_conn()
+
+    df = pd.read_sql("""
+    SELECT c2.nome, c2.cargo, s.data_inicio, s.dias
+    FROM solicitacoes s
+    JOIN colaboradores c1 ON c1.id = ?
+    JOIN colaboradores c2 ON c2.id = s.colaborador_id
+    WHERE c1.cargo = c2.cargo
+    AND s.status IN ('APROVADO','PENDENTE')
+    """, conn, params=(colaborador_id,))
+
+    conn.close()
+
+    conflitos = []
+    fim = data_inicio + timedelta(days=dias-1)
+
+    for _,r in df.iterrows():
+        inicio2 = datetime.strptime(r["data_inicio"], "%Y-%m-%d").date()
+        fim2 = inicio2 + timedelta(days=r["dias"]-1)
+
+        if not (fim < inicio2 or data_inicio > fim2):
+            conflitos.append(r["nome"])
+
+    return conflitos
 
 # ------------------------
-# CALENDÁRIO INTELIGENTE
-# ------------------------
-
-def verificar_conflito_equipe(data_inicio, dias, colaborador_id):
-    """Verifica se há conflito de equipe na data especificada."""
-    # Buscar cargo do colaborador
-    conn = get_conn()
-    df_colab = pd.read_sql("""
-        SELECT c.nome FROM colaboradores c WHERE c.id = ?
-    """, conn, params=(colaborador_id,))
-    conn.close()
-
-    if df_colab.empty:
-        return False, "Colaborador não encontrado."
-
-    nome = df_colab.iloc[0]["nome"]
-    cargo = EQUIPE.get(nome)
-
-    if not cargo:
-        return False, "Cargo não encontrado."
-
-    limite = LIMITES_EQUIPE.get(cargo, 1)
-
-    # Calcular período das férias
-    data_fim = data_inicio + timedelta(days=dias - 1)
-
-    # Buscar solicitações aprovadas no período
-    conn = get_conn()
-    df_solicitacoes = pd.read_sql("""
-        SELECT s.colaborador_id, c.nome
-        FROM solicitacoes s
-        JOIN colaboradores c ON s.colaborador_id = c.id
-        WHERE s.status = 'APROVADO'
-        AND (
-            (s.data_inicio <= ? AND DATE(s.data_inicio, '+' || (s.dias - 1) || ' days') >= ?) OR
-            (s.data_inicio <= ? AND DATE(s.data_inicio, '+' || (s.dias - 1) || ' days') >= ?) OR
-            (s.data_inicio >= ? AND DATE(s.data_inicio, '+' || (s.dias - 1) || ' days') <= ?)
-        )
-    """, conn, params=(str(data_inicio), str(data_inicio), str(data_fim), str(data_fim), str(data_inicio), str(data_fim)))
-    conn.close()
-
-    # Contar quantos do mesmo cargo estão de férias
-    colegas_cargo = [row["nome"] for _, row in df_solicitacoes.iterrows() if EQUIPE.get(row["nome"]) == cargo]
-
-    if len(colegas_cargo) >= limite:
-        return True, f"Conflito: {len(colegas_cargo)}/{limite} {cargo}s já de férias."
-
-    return False, f"OK: {len(colegas_cargo)}/{limite} {cargo}s de férias."
-
-def verificar_alerta_conflito(colaborador_id, data_inicio, dias):
-    """
-    Verifica se há pessoas do mesmo cargo em férias no período.
-    NÃO bloqueia, apenas alerta sobre a situação.
-    
-    Retorna: (tem_alerta: bool, lista_colegas: list)
-    """
-    # Buscar cargo do colaborador
-    conn = get_conn()
-    df_colab = pd.read_sql("""
-        SELECT c.nome FROM colaboradores c WHERE c.id = ?
-    """, conn, params=(colaborador_id,))
-    conn.close()
-
-    if df_colab.empty:
-        return False, []
-
-    nome = df_colab.iloc[0]["nome"]
-    cargo = EQUIPE.get(nome)
-
-    if not cargo:
-        return False, []
-
-    # Calcular período das férias
-    data_fim = data_inicio + timedelta(days=dias - 1)
-
-    # Buscar solicitações APROVADAS ou EM_ANDAMENTO no período (excluindo o próprio)
-    conn = get_conn()
-    df_conflitos = pd.read_sql("""
-        SELECT DISTINCT c.nome, s.data_inicio, s.dias, s.status
-        FROM solicitacoes s
-        JOIN colaboradores c ON s.colaborador_id = c.id
-        WHERE s.colaborador_id != ?
-        AND s.status IN ('APROVADO', 'EM_ANDAMENTO')
-        AND (
-            (DATE(s.data_inicio) <= ? AND DATE(s.data_inicio, '+' || (s.dias - 1) || ' days') >= ?)
-        )
-    """, conn, params=(colaborador_id, str(data_fim), str(data_inicio)))
-    conn.close()
-
-    if df_conflitos.empty:
-        return False, []
-
-    # Filtrar apenas pessoas do mesmo cargo
-    colegas_conflito = []
-    for _, row in df_conflitos.iterrows():
-        nome_colega = row["nome"]
-        cargo_colega = EQUIPE.get(nome_colega)
-        
-        if cargo_colega == cargo:
-            colegas_conflito.append({
-                "nome": nome_colega,
-                "data_inicio": row["data_inicio"],
-                "dias": row["dias"],
-                "status": row["status"]
-            })
-
-    if colegas_conflito:
-        return True, colegas_conflito
-
-    return False, []
-
-
-def gerar_calendario_mes(ano, mes):
-    """Gera dados do calendário para um mês específico."""
-    from calendar import monthrange
-
-    # Dias do mês
-    _, ultimo_dia = monthrange(ano, mes)
-    dias_mes = [date(ano, mes, dia) for dia in range(1, ultimo_dia + 1)]
-
-    calendario = {}
-
-    for dia in dias_mes:
-        dia_str = dia.strftime("%Y-%m-%d")
-
-        # Buscar solicitações para este dia
-        conn = get_conn()
-        df_dia = pd.read_sql("""
-            SELECT s.id, c.nome, s.data_inicio, s.dias, s.status, s.tipo_divisao
-            FROM solicitacoes s
-            JOIN colaboradores c ON s.colaborador_id = c.id
-            WHERE s.status = 'APROVADO'
-            AND DATE(s.data_inicio) <= ?
-            AND DATE(s.data_inicio, '+' || (s.dias - 1) || ' days') >= ?
-        """, conn, params=(dia_str, dia_str))
-        conn.close()
-
-        ferias_dia = []
-        status_dia = "NORMAL"
-        conflito = False
-
-        for _, row in df_dia.iterrows():
-            nome = row["nome"]
-            cargo = EQUIPE.get(nome, "Desconhecido")
-            status = row["status"]
-            tipo = row["tipo_divisao"]
-
-            ferias_dia.append({
-                "nome": nome,
-                "cargo": cargo,
-                "status": status,
-                "tipo": tipo
-            })
-
-            # Verificar conflito de equipe
-            limite = LIMITES_EQUIPE.get(cargo, 1)
-            colegas_cargo = [f for f in ferias_dia if f["cargo"] == cargo]
-
-            if len(colegas_cargo) > limite:
-                conflito = True
-
-        # Determinar status do dia
-        if conflito:
-            status_dia = "CONFLITO"
-        elif ferias_dia:
-            # Verificar se há diferentes status
-            statuses = set(f["status"] for f in ferias_dia)
-            if len(statuses) > 1:
-                status_dia = "MISTO"
-            elif "APROVADO" in statuses:
-                status_dia = "APROVADO"
-            elif "EM_ANDAMENTO" in statuses:
-                status_dia = "EM_ANDAMENTO"
-            else:
-                status_dia = "PENDENTE"
-
-        calendario[dia] = {
-            "ferias": ferias_dia,
-            "status": status_dia,
-            "conflito": conflito,
-            "quantidade": len(ferias_dia)
-        }
-
-    return calendario
-
-def sugerir_melhor_periodo(colaborador_id, dias):
-    """Sugere o melhor período disponível para férias."""
-    from calendar import monthrange
-
-    # Buscar informações do colaborador
-    conn = get_conn()
-    df_colab = pd.read_sql("""
-        SELECT c.nome FROM colaboradores c WHERE c.id = ?
-    """, conn, params=(colaborador_id,))
-    conn.close()
-
-    if df_colab.empty:
-        return None, "Colaborador não encontrado."
-
-    nome = df_colab.iloc[0]["nome"]
-    cargo = EQUIPE.get(nome)
-
-    if not cargo:
-        return None, "Cargo não encontrado."
-
-    limite = LIMITES_EQUIPE.get(cargo, 1)
-
-    # Analisar próximos 6 meses
-    hoje = date.today()
-    sugestoes = []
-
-    for meses_a_frente in range(6):
-        mes_atual = hoje.month + meses_a_frente
-        ano_atual = hoje.year + (mes_atual - 1) // 12
-        mes_atual = ((mes_atual - 1) % 12) + 1
-
-        calendario = gerar_calendario_mes(ano_atual, mes_atual)
-
-        for dia, dados in calendario.items():
-            if dia < hoje:
-                continue
-
-            # Verificar se o período cabe
-            periodo_fim = dia + timedelta(days=dias - 1)
-
-            # Verificar se todo o período está livre de conflitos
-            periodo_livre = True
-            carga_maxima = 0
-
-            for d in range(dias):
-                dia_check = dia + timedelta(days=d)
-                if dia_check in calendario:
-                    dados_dia = calendario[dia_check]
-                    colegas_cargo = [f for f in dados_dia["ferias"] if f["cargo"] == cargo]
-                    if len(colegas_cargo) >= limite:
-                        periodo_livre = False
-                        break
-                    carga_maxima = max(carga_maxima, len(colegas_cargo))
-
-            if periodo_livre:
-                # Verificar validações básicas
-                valido_janela, _ = validar_janela_ferias(dia)
-                valido_data, _ = validar_data_inicio(dia)
-
-                if valido_janela and valido_data:
-                    pontuacao = (limite - carga_maxima) * 10  # Preferir períodos com menos colegas
-                    sugestoes.append({
-                        "data_inicio": dia,
-                        "data_fim": periodo_fim,
-                        "pontuacao": pontuacao,
-                        "carga_maxima": carga_maxima
-                    })
-
-    # Ordenar por pontuação (maior = melhor)
-    sugestoes.sort(key=lambda x: x["pontuacao"], reverse=True)
-
-    return sugestoes[:5], "Sugestões geradas com sucesso."  # Top 5 sugestões
-
-# ------------------------
-# TOKENS
+# TOKEN
 # ------------------------
 
 def gerar_token(colaborador_id):
-    """Gera um token único para o colaborador."""
     token = str(uuid.uuid4())
     conn = get_conn()
-    c = conn.cursor()
-
-    c.execute(
-        "INSERT INTO tokens (colaborador_id, token) VALUES (?, ?)",
-        (colaborador_id, token)
-    )
-
+    conn.execute("INSERT INTO tokens (colaborador_id, token) VALUES (?,?)",(colaborador_id,token))
     conn.commit()
     conn.close()
     return token
 
 def validar_token(token):
-    """Valida se o token é válido e não foi usado."""
     conn = get_conn()
-    c = conn.cursor()
-
-    c.execute(
-        "SELECT colaborador_id, usado FROM tokens WHERE token = ?",
-        (token,)
-    )
-
-    result = c.fetchone()
+    r = conn.execute("SELECT colaborador_id, usado FROM tokens WHERE token=?",(token,)).fetchone()
     conn.close()
-
-    if result and result[1] == 0:
-        return result[0]
-    return None
+    return r[0] if r and r[1]==0 else None
 
 # ------------------------
-# INICIALIZAÇÃO
+# INIT
 # ------------------------
 
 init_db()
 importar_equipe()
-importar_controle()
+init_controle_ferias()
+
+BASE_URL = st.secrets.get("BASE_URL","http://localhost:8501")
+token = st.query_params.get("token")
 
 # ------------------------
-# CONFIGURAÇÃO
-# ------------------------
-
-BASE_URL = st.secrets.get("BASE_URL", "http://localhost:8501")
-params = st.query_params
-token = params.get("token")
-
-# ------------------------
-# INTERFACE FUNCIONÁRIO
+# FUNCIONÁRIO
 # ------------------------
 
 if token:
-    colaborador_id = validar_token(token)
+    colab_id = validar_token(token)
 
-    if colaborador_id:
-        st.title("🚀 Solicitação de Férias")
-
-        # Buscar nome do colaborador
+    if colab_id:
         conn = get_conn()
-        nome_df = pd.read_sql(
-            "SELECT nome FROM colaboradores WHERE id = ?",
-            conn,
-            params=(colaborador_id,)
-        )
+        nome = pd.read_sql("SELECT nome FROM colaboradores WHERE id=?", conn, params=(colab_id,)).iloc[0][0]
         conn.close()
-        nome = nome_df.iloc[0]["nome"]
 
-        st.subheader(f"Olá, {nome}!")
+        st.title("Solicitação de Férias")
+        st.write(nome)
 
-        # Formulário
-        with st.form("form_ferias"):
-            data_inicio = st.date_input(
-                "📅 Data de início",
-                min_value=date.today(),
-                help="Escolha a data de início das férias"
+        data_inicio = st.date_input("Data início")
+        tipo = st.selectbox("Tipo",["30 dias","15 + 15 dias","20 + 10 dias"])
+        dias = st.number_input("Dias",min_value=1,max_value=30)
+
+        saldo_restante = get_saldo_restante(colab_id)
+        st.info(f"Saldo disponível: {saldo_restante} dias")
+
+        if st.button("Enviar"):
+
+            ok,msg = validar_data_inicio(data_inicio)
+            if not ok:
+                st.error(msg)
+                st.stop()
+
+            if not validar_janela(data_inicio):
+                st.error("Fora da janela")
+                st.stop()
+
+            saldo_restante = get_saldo_restante(colab_id)
+            if dias > saldo_restante:
+                st.error(f"Saldo insuficiente. Disponível: {saldo_restante} dias.")
+                st.stop()
+
+            conflitos = verificar_alerta(colab_id,data_inicio,dias)
+
+            if conflitos:
+                st.warning(f"Já existem: {', '.join(conflitos)}")
+                if not st.checkbox("Continuar mesmo assim"):
+                    st.stop()
+
+            status_inicial = "PENDENTE_ANALISE" if conflitos else "PENDENTE"
+            conn = get_conn()
+            conn.execute("""
+            INSERT INTO solicitacoes (colaborador_id,data_inicio,dias,tipo_divisao,status,tem_conflito)
+            VALUES (?,?,?,?,?,?)
+            """,(colab_id,str(data_inicio),dias,tipo,status_inicial,1 if conflitos else 0))
+
+            conn.execute("UPDATE tokens SET usado=1 WHERE token=?",(token,))
+            conn.commit()
+            conn.close()
+
+            st.success("Enviado para aprovação")
+
+            conn_gestor = get_conn()
+            gestor_df = pd.read_sql(
+                "SELECT telefone FROM colaboradores WHERE cargo LIKE '%gestor%' OR cargo LIKE '%Gestor%' LIMIT 1",
+                conn_gestor
             )
-
-            tipo_divisao = st.selectbox(
-                "📊 Tipo de período",
-                ["30 dias", "15 + 15 dias", "20 + 10 dias"],
-                help="Selecione o tipo de período desejado"
-            )
-
-            dias = st.number_input(
-                "⏱️ Dias",
-                min_value=1,
-                max_value=30,
-                value=30,
-                help="Número de dias a solicitar"
-            )
-
-            submitted = st.form_submit_button("📤 Enviar Solicitação")
-
-        if submitted:
-            # Validações em ordem obrigatória
-            valido, msg = validar_janela_ferias(data_inicio)
-            if not valido:
-                st.error(f"❌ {msg}")
-                st.stop()
-
-            valido, msg = validar_data_inicio(data_inicio)
-            if not valido:
-                st.error(f"❌ {msg}")
-                st.stop()
-
-            valido, msg = validar_periodo(dias)
-            if not valido:
-                st.error(f"❌ {msg}")
-                st.stop()
-
-            valido, msg = validar_divisao(tipo_divisao, dias)
-            if not valido:
-                st.error(f"❌ {msg}")
-                st.stop()
-
-            # Validação final
-            valido, msg = validar_solicitacao(nome, data_inicio, dias, colaborador_id)
-            if not valido:
-                st.error(f"❌ {msg}")
-            else:
-                # Verificar alerta de conflito (não bloqueante)
-                tem_alerta, colegas_conflito = verificar_alerta_conflito(colaborador_id, data_inicio, dias)
-                confirmar_conflito = False
-
-                if tem_alerta:
-                    st.warning("⚠️ Alerta de Conflito de Equipe")
-                    st.write("Já existem funcionários da mesma função programados neste período:")
-                    
-                    # Listar colegas em conflito
-                    for colega in colegas_conflito:
-                        data_fim = datetime.strptime(colega["data_inicio"], "%Y-%m-%d").date() + timedelta(days=colega["dias"] - 1)
-                        status_emoji = {
-                            "APROVADO": "✅",
-                            "EM_ANDAMENTO": "🔄"
-                        }.get(colega["status"], "❓")
-                        
-                        st.write(
-                            f"{status_emoji} **{colega['nome']}** - "
-                            f"{colega['data_inicio']} até {data_fim.strftime('%d/%m/%Y')} "
-                            f"({colega['dias']} dias)"
-                        )
-
-                    # Checkbox para confirmar
-                    confirmar_conflito = st.checkbox(
-                        "✅ Entendo o conflito e desejo continuar com a solicitação",
-                        key="confirmar_conflito"
-                    )
-
-                    if not confirmar_conflito:
-                        st.info("💡 Você pode usar a aba 'Calendário' para encontrar datas com menor conflito.")
-                        st.stop()
-
-                # Salvar solicitação com status PENDENTE
-                # Se houve conflito confirmado, marcar como PENDENTE_ANALISE
-                status_inicial = "PENDENTE_ANALISE" if tem_alerta else "PENDENTE"
-                
-                conn = get_conn()
-                c = conn.cursor()
-
-                c.execute("""
-                    INSERT INTO solicitacoes (colaborador_id, data_inicio, dias, tipo_divisao, status, tem_conflito)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (colaborador_id, str(data_inicio), dias, tipo_divisao, status_inicial, 1 if tem_alerta else 0))
-
-                # Marcar token como usado
-                c.execute(
-                    "UPDATE tokens SET usado = 1 WHERE token = ?",
-                    (token,)
-                )
-
-                conn.commit()
-                conn.close()
-
-                st.success("📝 Solicitação enviada para aprovação!")
-                st.info("⏳ Sua solicitação será analisada pelo gerente. Você receberá um retorno em breve.")
-                
-                # Buscar telefone do gestor e oferecer notificação
-                conn_notify = get_conn()
-                gestor_df = pd.read_sql(
-                    "SELECT telefone FROM colaboradores WHERE nome = 'Adeilson de Oliveira'",
-                    conn_notify
-                )
-                conn_notify.close()
-                
-                if not gestor_df.empty and pd.notna(gestor_df.iloc[0]["telefone"]):
-                    gestor_telefone = gestor_df.iloc[0]["telefone"]
-                    data_fim_str = (data_inicio + timedelta(days=dias - 1)).strftime("%d/%m/%Y")
-                    data_inicio_str = data_inicio.strftime("%d/%m/%Y")
-                    
-                    mensagem_gestor = (
-                        f"🔔 Nova solicitação de férias:\n"
-                        f"Nome: {nome}\n"
-                        f"Início: {data_inicio_str}\n"
-                        f"Fim: {data_fim_str}\n"
-                        f"Dias: {dias}\n"
-                        f"Tipo: {tipo_divisao}\n"
-                        f"\nAcesse o sistema para aprovar."
-                    )
-                    
-                    wa_link_gestor = gerar_link_whatsapp(mensagem_gestor)
-                    st.divider()
-                    st.subheader("📱 Notificar Gestor")
-                    st.link_button("📲 Enviar Notificação via WhatsApp", wa_link_gestor)
-                
-                st.balloons()
-
-    else:
-        st.error("🔒 Link inválido ou já utilizado.")
+            conn_gestor.close()
+            if not gestor_df.empty and gestor_df.iloc[0][0]:
+                link = gerar_link_whatsapp(gestor_df.iloc[0][0], f"Nova solicitação de férias de {nome}")
+                st.markdown(f"[📲 Notificar Gestor via WhatsApp]({link})")
 
 # ------------------------
-# INTERFACE ADMIN
+# ADMIN
 # ------------------------
 
 else:
-    st.title("👨‍💼 Painel Administrativo - Gestão de Férias")
+    st.title("Painel Administrativo")
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "📋 Colaboradores",
-        "🔗 Gerar Links",
-        "📅 Solicitações",
-        "📊 Calendário",
-        "⚙️ Configurações"
-    ])
+    tab1,tab2,tab3,tab4,tab5,tab6 = st.tabs(["Colaboradores","Links","Solicitações","Calendário","Dashboard","Relatório RH"])
 
-    # Tab 1: Colaboradores
     with tab1:
-        st.header("Colaboradores Cadastrados")
         conn = get_conn()
         df = pd.read_sql("SELECT * FROM colaboradores", conn)
         conn.close()
+        st.subheader("Colaboradores")
+        st.dataframe(df)
 
-        if df.empty:
-            st.warning("Nenhum colaborador encontrado.")
-        else:
-            st.subheader("📋 Lista de Colaboradores")
-            st.dataframe(df, use_container_width=True)
-            
-            st.divider()
-            st.subheader("📱 Editar Telefone")
-            
-            conn = get_conn()
-            df_colab = pd.read_sql("SELECT id, nome, telefone FROM colaboradores ORDER BY nome", conn)
-            conn.close()
-            
-            if not df_colab.empty:
-                nome_selecionado = st.selectbox(
-                    "Selecione o colaborador",
-                    df_colab["nome"].tolist(),
-                    key="edit_telefone_select"
-                )
-                
-                # Buscar telefone atual
-                row_colab = df_colab[df_colab["nome"] == nome_selecionado].iloc[0]
-                colab_id = row_colab["id"]
-                telefone_atual = row_colab["telefone"] if pd.notna(row_colab["telefone"]) else ""
-                
-                novo_telefone = st.text_input(
-                    "Telefone (com DDD, ex: 11999999999)",
-                    value=telefone_atual,
-                    placeholder="11999999999",
-                    key="edit_telefone_input"
-                )
-                
-                if st.button("💾 Salvar Telefone", key="save_telefone"):
-                    if novo_telefone.strip():
-                        conn = get_conn()
-                        c = conn.cursor()
-                        c.execute(
-                            "UPDATE colaboradores SET telefone = ? WHERE id = ?",
-                            (novo_telefone, colab_id)
-                        )
-                        conn.commit()
-                        conn.close()
-                        st.success(f"✅ Telefone de {nome_selecionado} atualizado!")
-                        st.rerun()
-                    else:
-                        st.warning("Por favor, insira um telefone.")
-
-    # Tab 2: Gerar Links
     with tab2:
-        st.header("Gerar Link de Solicitação")
-
         conn = get_conn()
         df = pd.read_sql("SELECT * FROM colaboradores", conn)
         conn.close()
+        nome = st.selectbox("Colaborador", df["nome"])
 
-        if df.empty:
-            st.warning("Nenhum colaborador encontrado.")
-        else:
-            nome = st.selectbox("Selecione o colaborador", df["nome"])
+        if st.button("Gerar"):
+            id = int(df[df["nome"]==nome]["id"].values[0])
+            t = gerar_token(id)
+            link = f"{BASE_URL}/?token={t}"
+            st.code(link)
 
-            if st.button("🔗 Gerar Link"):
-                colaborador_id = df[df["nome"] == nome]["id"].values[0]
-                token = gerar_token(colaborador_id)
-                link = f"{BASE_URL}/?token={token}"
-
-                st.success("Link gerado com sucesso!")
-                st.code(link, language="text")
-
-                # Link para WhatsApp
-                mensagem = f"Olá {nome}, acesse o link para solicitar suas férias: {link}"
-                mensagem_encoded = urllib.parse.quote(mensagem)
-                wa_link = f"https://wa.me/?text={mensagem_encoded}"
-                st.link_button("📱 Enviar via WhatsApp", wa_link)
-
-    # Tab 3: Solicitações
     with tab3:
-        st.header("📋 Solicitações de Férias - Aprovação Gerencial")
-
-        # Filtros
-        col1, col2 = st.columns(2)
-        with col1:
-            filtro_status = st.selectbox(
-                "Filtrar por status",
-                ["TODAS", "PENDENTE", "PENDENTE_ANALISE", "APROVADO", "REPROVADO"],
-                index=0
-            )
-        
-        with col2:
-            st.write("")  # Espaço
-
-        # Buscar solicitações
         conn = get_conn()
-        if filtro_status == "TODAS":
-            df = pd.read_sql("""
-                SELECT s.id, c.nome, s.data_inicio, s.dias, s.tipo_divisao, s.status, s.criado_em, s.tem_conflito, s.data_aprovacao, s.motivo_rejeicao
-                FROM solicitacoes s
-                JOIN colaboradores c ON s.colaborador_id = c.id
-                ORDER BY 
-                    CASE 
-                        WHEN s.status = 'PENDENTE_ANALISE' THEN 0
-                        WHEN s.status = 'PENDENTE' THEN 1
-                        WHEN s.status = 'APROVADO' THEN 2
-                        WHEN s.status = 'REPROVADO' THEN 3
-                    END,
-                    s.criado_em DESC
-            """, conn)
-        else:
-            df = pd.read_sql("""
-                SELECT s.id, c.nome, s.data_inicio, s.dias, s.tipo_divisao, s.status, s.criado_em, s.tem_conflito, s.data_aprovacao, s.motivo_rejeicao
-                FROM solicitacoes s
-                JOIN colaboradores c ON s.colaborador_id = c.id
-                WHERE s.status = ?
-                ORDER BY s.criado_em DESC
-            """, conn, params=(filtro_status,))
+        df = pd.read_sql("""
+        SELECT s.id, s.colaborador_id, c.nome, s.data_inicio, s.dias, s.tipo_divisao, s.status, s.data_aprovacao
+        FROM solicitacoes s JOIN colaboradores c ON c.id=s.colaborador_id
+        ORDER BY s.status, s.data_inicio
+        """, conn)
         conn.close()
 
         if df.empty:
-            st.info("Nenhuma solicitação encontrada com esse filtro.")
+            st.info("Nenhuma solicitação encontrada.")
         else:
-            # Exibir cada solicitação com opções de aprovação
-            for idx, row in df.iterrows():
-                # Definir cor baseada no status
-                status_colors = {
-                    "PENDENTE": "🟡",
-                    "PENDENTE_ANALISE": "🔴",
-                    "APROVADO": "🟢",
-                    "REPROVADO": "⚫"
-                }
-                
-                status_emoji = status_colors.get(row["status"], "⚪")
-                conflito_emoji = "⚠️" if row["tem_conflito"] else ""
-
-                with st.container(border=True):
-                    col1, col2, col3 = st.columns([2, 3, 2])
-                    
+            for _, row in df.iterrows():
+                with st.container():
+                    col1, col2, col3 = st.columns([2,2,1])
                     with col1:
                         st.write(f"**{row['nome']}**")
-                        st.write(f"📅 {row['data_inicio']} ({row['dias']} dias)")
-                        st.write(f"📌 {row['tipo_divisao']}")
-                    
+                        st.write(f"Data início: {row['data_inicio']}")
+                        st.write(f"Dias: {row['dias']}")
+                        st.write(f"Tipo: {row['tipo_divisao']}")
                     with col2:
-                        st.write(f"Status: {status_emoji} **{row['status']}** {conflito_emoji}")
-                        if row["status"] == "REPROVADO" and row["motivo_rejeicao"]:
-                            st.error(f"Motivo: {row['motivo_rejeicao']}")
-                        if row["status"] == "APROVADO" and row["data_aprovacao"]:
-                            data_aprov = datetime.fromisoformat(row["data_aprovacao"]).strftime("%d/%m/%Y %H:%M")
-                            st.success(f"Aprovado em: {data_aprov}")
-                    
+                        st.write(f"Status: {row['status']}")
+                        if row['data_aprovacao']:
+                            st.write(f"Aprovado em: {row['data_aprovacao']}")
                     with col3:
-                        # Botões de ação (apenas para PENDENTE/PENDENTE_ANALISE)
-                        if row["status"] in ["PENDENTE", "PENDENTE_ANALISE"]:
-                            col_btn1, col_btn2 = st.columns(2)
-                            
-                            with col_btn1:
-                                if st.button("✅ Aprovar", key=f"aprovar_{row['id']}"):
-                                    aprovar_solicitacao(row["id"])
-                                    
-                                    # Notificar funcionário
-                                    conn_notify = get_conn()
-                                    func_df = pd.read_sql(
-                                        "SELECT telefone FROM colaboradores WHERE nome = ?",
-                                        conn_notify,
-                                        params=(row["nome"],)
-                                    )
-                                    conn_notify.close()
-                                    
-                                    if not func_df.empty and pd.notna(func_df.iloc[0]["telefone"]):
-                                        tel_func = func_df.iloc[0]["telefone"]
-                                        msg_aprovacao = f"✅ Sua solicitação de férias de {row['dias']} dias iniciando em {row['data_inicio']} foi APROVADA!"
-                                        st.session_state[f"wa_link_approve_{row['id']}"] = gerar_link_whatsapp(msg_aprovacao)
-                                    
-                                    st.success("Solicitação aprovada!")
-                                    st.rerun()
-                            
-                            with col_btn2:
-                                if st.button("❌ Reprovar", key=f"reprovar_btn_{row['id']}"):
-                                    st.session_state[f"expand_reject_{row['id']}"] = True
-                            
-                            # Campo de motivo para reprovação
-                            if st.session_state.get(f"expand_reject_{row['id']}", False):
-                                with st.expander("Motivo da Rejeição", expanded=True):
-                                    motivo = st.text_input(
-                                        "Motivo",
-                                        key=f"motivo_{row['id']}",
-                                        placeholder="Ex: Conflito de equipe, período bloqueado..."
-                                    )
-                                    if st.button("Confirmar Rejeição", key=f"confirm_reprovar_{row['id']}"):
-                                        if motivo.strip():
-                                            reprovar_solicitacao(row["id"], motivo)
-                                            
-                                            # Notificar funcionário
-                                            conn_notify = get_conn()
-                                            func_df = pd.read_sql(
-                                                "SELECT telefone FROM colaboradores WHERE nome = ?",
-                                                conn_notify,
-                                                params=(row["nome"],)
-                                            )
-                                            conn_notify.close()
-                                            
-                                            if not func_df.empty and pd.notna(func_df.iloc[0]["telefone"]):
-                                                tel_func = func_df.iloc[0]["telefone"]
-                                                msg_rejeicao = f"❌ Sua solicitação de férias foi REPROVADA.\nMotivo: {motivo}"
-                                                st.session_state[f"wa_link_reject_{row['id']}"] = gerar_link_whatsapp(msg_rejeicao)
-                                            
-                                            st.error("Solicitação reprovada!")
-                                            st.session_state[f"expand_reject_{row['id']}"] = False
-                                            st.rerun()
-                                        else:
-                                            st.warning("Por favor, insira um motivo para a rejeição.")
-                        
-                        # Mostrar botão de notificação se necessário
-                        if st.session_state.get(f"wa_link_approve_{row['id']}"):
-                            st.divider()
-                            st.link_button(
-                                "📲 Notificar Funcionário (Aprovação)",
-                                st.session_state[f"wa_link_approve_{row['id']}"],
-                                key=f"notify_approve_{row['id']}"
-                            )
-                        
-                        if st.session_state.get(f"wa_link_reject_{row['id']}"):
-                            st.divider()
-                            st.link_button(
-                                "📲 Notificar Funcionário (Rejeição)",
-                                st.session_state[f"wa_link_reject_{row['id']}"],
-                                key=f"notify_reject_{row['id']}"
-                            )
-
-    # Tab 4: Calendário
-    with tab4:
-        st.header("📊 Calendário de Férias")
-
-        # Selecionar mês e ano
-        col1, col2 = st.columns(2)
-        with col1:
-            ano_selecionado = st.selectbox(
-                "Ano",
-                options=[2024, 2025, 2026, 2027, 2028],
-                index=2  # 2026 por padrão
-            )
-        with col2:
-            mes_selecionado = st.selectbox(
-                "Mês",
-                options=list(range(1, 13)),
-                format_func=lambda x: ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
-                                     "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"][x-1],
-                index=date.today().month - 1
-            )
-
-        if st.button("📅 Gerar Calendário"):
-            with st.spinner("Gerando calendário..."):
-                calendario = gerar_calendario_mes(ano_selecionado, mes_selecionado)
-
-            # Criar visualização em grid
-            st.subheader(f"📅 {['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
-                              'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'][mes_selecionado-1]} {ano_selecionado}")
-
-            # Dias da semana como cabeçalho
-            dias_semana = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
-            cols = st.columns(7)
-            for i, dia in enumerate(dias_semana):
-                cols[i].markdown(f"**{dia}**")
-
-            # Calcular primeiro dia do mês
-            primeiro_dia = date(ano_selecionado, mes_selecionado, 1)
-            dia_semana_inicio = primeiro_dia.weekday()  # 0=seg, 6=dom
-
-            # Criar grid do mês
-            dia_atual = 1
-            from calendar import monthrange
-            _, ultimo_dia = monthrange(ano_selecionado, mes_selecionado)
-
-            for semana in range(6):  # Máximo 6 semanas por mês
-                cols = st.columns(7)
-                for dia_semana in range(7):
-                    with cols[dia_semana]:
-                        if semana == 0 and dia_semana < dia_semana_inicio:
-                            # Dias do mês anterior
-                            st.write("")
-                        elif dia_atual > ultimo_dia:
-                            # Dias do mês seguinte
-                            st.write("")
+                        if row['status'] != 'APROVADO':
+                            if st.button(f"✅ Aprovar {row['id']}", key=f"aprovar_{row['id']}"):
+                                conn = get_conn()
+                                conn.execute("""
+                                    UPDATE solicitacoes
+                                    SET status='APROVADO', data_aprovacao = datetime('now')
+                                    WHERE id = ?
+                                """, (row['id'],))
+                                conn.commit()
+                                conn.close()
+                                incrementar_saldo_utilizado(int(row['colaborador_id']), int(row['dias']))
+                                st.experimental_rerun()
+                            if st.button(f"❌ Reprovar {row['id']}", key=f"reprovar_{row['id']}"):
+                                conn = get_conn()
+                                conn.execute("""
+                                    UPDATE solicitacoes
+                                    SET status='REPROVADO'
+                                    WHERE id = ?
+                                """, (row['id'],))
+                                conn.commit()
+                                conn.close()
+                                st.experimental_rerun()
                         else:
-                            # Dia válido do mês
-                            dia_data = date(ano_selecionado, mes_selecionado, dia_atual)
-                            dados_dia = calendario.get(dia_data, {"ferias": [], "status": "NORMAL", "quantidade": 0})
+                            conn = get_conn()
+                            telefone_df = pd.read_sql("SELECT telefone FROM colaboradores WHERE id = ?", conn, params=(row['colaborador_id'],))
+                            conn.close()
+                            if not telefone_df.empty and telefone_df.iloc[0,0]:
+                                wa_link = gerar_link_whatsapp(telefone_df.iloc[0,0], "Sua solicitação foi APROVADA")
+                                st.markdown(f"[📲 Notificar Funcionário via WhatsApp]({wa_link})")
 
-                            # Determinar cor e emoji baseado no status
-                            if dados_dia["status"] == "CONFLITO":
-                                cor = "🔴"
-                                bg_color = "#ffcccc"
-                            elif dados_dia["status"] == "APROVADO":
-                                cor = "🟢"
-                                bg_color = "#ccffcc"
-                            elif dados_dia["status"] == "EM_ANDAMENTO":
-                                cor = "🔵"
-                                bg_color = "#ccccff"
-                            elif dados_dia["status"] == "PENDENTE":
-                                cor = "⚪"
-                                bg_color = "#ffffcc"
-                            else:
-                                cor = "⚫"
-                                bg_color = "#f0f0f0"
+    with tab4:
+        st.subheader("Calendário")
+        st.write("Visualização do calendário será implementada em breve.")
 
-                            # Criar botão/elemento clicável
-                            if dados_dia["quantidade"] > 0:
-                                if st.button(
-                                    f"{cor} {dia_atual}\n{dados_dia['quantidade']} pessoa{'s' if dados_dia['quantidade'] != 1 else ''}",
-                                    key=f"dia_{dia_atual}",
-                                    help=f"Clique para ver detalhes de {dia_data.strftime('%d/%m/%Y')}"
-                                ):
-                                    # Mostrar detalhes em um expander
-                                    with st.expander(f"📅 Detalhes de {dia_data.strftime('%d/%m/%Y')}", expanded=True):
-                                        if dados_dia["conflito"]:
-                                            st.error("🚨 CONFLITO DE EQUIPE DETECTADO!")
-
-                                        for ferias in dados_dia["ferias"]:
-                                            status_emoji = {
-                                                "APROVADO": "✅",
-                                                "EM_ANDAMENTO": "🔄",
-                                                "PENDENTE": "⏳"
-                                            }.get(ferias["status"], "❓")
-
-                                            st.write(f"{status_emoji} **{ferias['nome']}** - {ferias['cargo']} ({ferias['tipo']})")
-                            else:
-                                # Dia sem férias
-                                st.button(
-                                    f"⚫ {dia_atual}",
-                                    key=f"dia_{dia_atual}",
-                                    disabled=True,
-                                    help=f"Nenhuma férias em {dia_data.strftime('%d/%m/%Y')}"
-                                )
-
-                            dia_atual += 1
-
-                            if dia_atual > ultimo_dia:
-                                break
-
-                if dia_atual > ultimo_dia:
-                    break
-
-        # Sugestão automática
-        st.divider()
-        st.subheader("🎯 Sugestão Automática de Período")
-
+    with tab5:
         conn = get_conn()
-        df_colaboradores = pd.read_sql("SELECT id, nome FROM colaboradores", conn)
+        total_colab = pd.read_sql("SELECT COUNT(*) AS total FROM colaboradores", conn).iloc[0,0]
+        pendentes = pd.read_sql("SELECT COUNT(*) AS total FROM solicitacoes WHERE status='PENDENTE'", conn).iloc[0,0]
+        aprovadas = pd.read_sql("SELECT COUNT(*) AS total FROM solicitacoes WHERE status='APROVADO'", conn).iloc[0,0]
+        em_andamento = pd.read_sql("SELECT COUNT(*) AS total FROM solicitacoes WHERE status='EM_ANDAMENTO'", conn).iloc[0,0]
+        df_mes = pd.read_sql("""
+            SELECT substr(data_inicio,1,7) AS mes, COUNT(*) AS total
+            FROM solicitacoes
+            WHERE status='APROVADO'
+            GROUP BY mes
+            ORDER BY mes
+        """, conn)
+        df_carga = pd.read_sql("""
+            SELECT c.cargo, COUNT(*) AS total
+            FROM solicitacoes s JOIN colaboradores c ON c.id=s.colaborador_id
+            GROUP BY c.cargo
+        """, conn)
         conn.close()
 
-        if not df_colaboradores.empty:
-            colaborador_nome = st.selectbox(
-                "Selecione colaborador para sugestão",
-                df_colaboradores["nome"],
-                key="sugestao_colaborador"
-            )
+        st.subheader("Dashboard Executivo")
+        cols = st.columns(4)
+        cols[0].metric("Total colaboradores", int(total_colab))
+        cols[1].metric("Solicitações pendentes", int(pendentes))
+        cols[2].metric("Aprovadas", int(aprovadas))
+        cols[3].metric("Em andamento", int(em_andamento))
 
-            dias_sugestao = st.selectbox(
-                "Dias de férias",
-                [15, 20, 30],
-                key="sugestao_dias"
-            )
+        st.subheader("Férias por mês")
+        if not df_mes.empty:
+            df_mes = df_mes.set_index('mes')
+            st.bar_chart(df_mes['total'])
+        else:
+            st.info("Nenhum dado aprovado disponível.")
 
-            if st.button("🔍 Sugerir Melhor Período"):
-                colaborador_id = df_colaboradores[df_colaboradores["nome"] == colaborador_nome]["id"].values[0]
+        st.subheader("Carga por equipe")
+        st.dataframe(df_carga)
 
-                with st.spinner("Analisando calendário..."):
-                    sugestoes, msg = sugerir_melhor_periodo(colaborador_id, dias_sugestao)
+    with tab6:
+        conn = get_conn()
+        df = pd.read_sql("""
+            SELECT c.nome, c.cargo, s.data_inicio, s.dias, s.data_aprovacao
+            FROM solicitacoes s JOIN colaboradores c ON c.id=s.colaborador_id
+            WHERE s.status = 'APROVADO'
+        """, conn)
+        conn.close()
 
-                if sugestoes:
-                    st.success(f"✅ {len(sugestoes)} sugestões encontradas!")
-
-                    for i, sugestao in enumerate(sugestoes[:3], 1):  # Top 3
-                        with st.container():
-                            col1, col2, col3 = st.columns([2, 2, 1])
-                            with col1:
-                                st.write(f"**Sugestão {i}:** {sugestao['data_inicio'].strftime('%d/%m/%Y')} - {sugestao['data_fim'].strftime('%d/%m/%Y')}")
-                            with col2:
-                                st.write(f"Carga máxima: {sugestao['carga_maxima']} colega(s)")
-                            with col3:
-                                st.write(f"Score: {sugestao['pontuacao']}")
-                else:
-                    st.warning("Nenhuma sugestão disponível no momento.")
-
-    # Tab 5: Configurações
-    with tab5:
-        st.header("Configurações do Sistema")
-
-        if st.button("🔄 Reimportar Equipe"):
-            importar_equipe()
-            st.success("Equipe reimportada!")
-
-        if st.button("📊 Reimportar Controle de Férias"):
-            importar_controle()
-
-        st.subheader("Feriados do Ano Atual")
-        ano_atual = date.today().year
-        feriados = get_feriados(ano_atual)
-        st.write(f"Feriados para {ano_atual}:")
-        for feriado in sorted(feriados):
-            st.write(f"- {feriado}")
+        st.subheader("Relatório RH")
+        st.dataframe(df)
+        if not df.empty:
+            csv = df.to_csv(index=False, encoding='utf-8-sig')
+            st.download_button("Exportar CSV", csv, file_name='ferias_aprovadas.csv', mime='text/csv')
