@@ -105,20 +105,17 @@ def init_db():
 
 def importar_equipe():
     try:
-        caminho_csv = Path("base_ferias.csv")
-        caminho_xlsx = Path("base_ferias.xlsx")
+        caminho_xlsx = Path("ferias_equipe.xlsx")
 
-        if caminho_csv.exists():
-            df = pd.read_csv(caminho_csv)
-        elif caminho_xlsx.exists():
-            df = pd.read_excel(caminho_xlsx)
-        else:
+        if not caminho_xlsx.exists():
             return
+
+        df = pd.read_excel(caminho_xlsx)
 
         if df.empty:
             return
 
-        expected_columns = {"nome", "telefone", "email", "cargo"}
+        expected_columns = {"Nome_Completo", "Telefone", "Email", "Cargo"}
         if not expected_columns.issubset(set(df.columns)):
             return
 
@@ -126,17 +123,22 @@ def importar_equipe():
         c = conn.cursor()
 
         for _, row in df.iterrows():
-            nome = str(row.get("nome", "")).strip()
-            telefone = str(row.get("telefone", "")).strip()
-            email = str(row.get("email", "")).strip()
-            cargo = str(row.get("cargo", "")).strip()
+            nome = str(row.get("Nome_Completo", "")).strip()
+            telefone = str(row.get("Telefone", "")).strip()
+            email = str(row.get("Email", "")).strip()
+            cargo = str(row.get("Cargo", "")).strip()
 
             if not nome:
                 continue
 
+            # Verificar se já existe
+            c.execute("SELECT id FROM colaboradores WHERE nome = ?", (nome,))
+            if c.fetchone():
+                continue  # Já existe, pular
+
             c.execute(
                 """
-                INSERT OR IGNORE INTO colaboradores (nome, telefone, email, cargo)
+                INSERT INTO colaboradores (nome, telefone, email, cargo)
                 VALUES (?, ?, ?, ?)
                 """,
                 (nome, telefone, email, cargo),
@@ -306,8 +308,8 @@ importar_equipe()
 init_controle_ferias()
 
 BASE_URL = st.secrets.get("BASE_URL", "http://localhost:8501")
-query_params = st.experimental_get_query_params()
-token = query_params.get("token", [None])[0]
+params = st.query_params
+token = params.get("token")
 
 # ------------------------
 # FUNCIONÁRIO
@@ -318,8 +320,14 @@ if token:
 
     if colab_id:
         conn = get_conn()
-        nome = pd.read_sql("SELECT nome FROM colaboradores WHERE id=?", conn, params=(colab_id,)).iloc[0][0]
+        df_nome = pd.read_sql("SELECT nome FROM colaboradores WHERE id=?", conn, params=(colab_id,))
         conn.close()
+
+        if df_nome.empty:
+            st.error("Colaborador não encontrado")
+            st.stop()
+
+        nome = df_nome.iloc[0][0]
 
         st.title("Solicitação de Férias")
         st.write(nome)
@@ -373,6 +381,7 @@ if token:
                 conn_gestor
             )
             conn_gestor.close()
+
             if not gestor_df.empty and gestor_df.iloc[0][0]:
                 link = gerar_link_whatsapp(gestor_df.iloc[0][0], f"Nova solicitação de férias de {nome}")
                 st.markdown(f"[📲 Notificar Gestor via WhatsApp]({link})")
@@ -456,7 +465,12 @@ else:
                             conn = get_conn()
                             telefone_df = pd.read_sql("SELECT telefone FROM colaboradores WHERE id = ?", conn, params=(row['colaborador_id'],))
                             conn.close()
-                            if not telefone_df.empty and telefone_df.iloc[0,0]:
+
+                            if telefone_df.empty:
+                                st.error("Telefone não encontrado")
+                                st.stop()
+
+                            if telefone_df.iloc[0,0]:
                                 wa_link = gerar_link_whatsapp(telefone_df.iloc[0,0], "Sua solicitação foi APROVADA")
                                 st.markdown(f"[📲 Notificar Funcionário via WhatsApp]({wa_link})")
 
@@ -466,10 +480,18 @@ else:
 
     with tab5:
         conn = get_conn()
-        total_colab = pd.read_sql("SELECT COUNT(*) AS total FROM colaboradores", conn).iloc[0,0]
-        pendentes = pd.read_sql("SELECT COUNT(*) AS total FROM solicitacoes WHERE status='PENDENTE'", conn).iloc[0,0]
-        aprovadas = pd.read_sql("SELECT COUNT(*) AS total FROM solicitacoes WHERE status='APROVADO'", conn).iloc[0,0]
-        em_andamento = pd.read_sql("SELECT COUNT(*) AS total FROM solicitacoes WHERE status='EM_ANDAMENTO'", conn).iloc[0,0]
+        df_total_colab = pd.read_sql("SELECT COUNT(*) AS total FROM colaboradores", conn)
+        total_colab = df_total_colab.iloc[0,0] if not df_total_colab.empty else 0
+
+        df_pendentes = pd.read_sql("SELECT COUNT(*) AS total FROM solicitacoes WHERE status='PENDENTE'", conn)
+        pendentes = df_pendentes.iloc[0,0] if not df_pendentes.empty else 0
+
+        df_aprovadas = pd.read_sql("SELECT COUNT(*) AS total FROM solicitacoes WHERE status='APROVADO'", conn)
+        aprovadas = df_aprovadas.iloc[0,0] if not df_aprovadas.empty else 0
+
+        df_em_andamento = pd.read_sql("SELECT COUNT(*) AS total FROM solicitacoes WHERE status='EM_ANDAMENTO'", conn)
+        em_andamento = df_em_andamento.iloc[0,0] if not df_em_andamento.empty else 0
+
         df_mes = pd.read_sql("""
             SELECT substr(data_inicio,1,7) AS mes, COUNT(*) AS total
             FROM solicitacoes
