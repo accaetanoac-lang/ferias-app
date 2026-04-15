@@ -77,7 +77,8 @@ def init_db():
     c.execute("""
     CREATE TABLE IF NOT EXISTS colaboradores (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nome TEXT UNIQUE NOT NULL
+        nome TEXT UNIQUE NOT NULL,
+        telefone TEXT
     )
     """)
 
@@ -102,7 +103,10 @@ def init_db():
         dias INTEGER NOT NULL,
         tipo_divisao TEXT NOT NULL,
         status TEXT DEFAULT 'PENDENTE',
+        tem_conflito INTEGER DEFAULT 0,
         criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
+        data_aprovacao TEXT,
+        motivo_rejeicao TEXT,
         FOREIGN KEY (colaborador_id) REFERENCES colaboradores (id)
     )
     """)
@@ -268,6 +272,48 @@ def validar_solicitacao(nome, data_inicio, dias, colaborador_id=None):
     return True, "Solicitação válida."
 
 # ------------------------
+# APROVAÇÃO GERENCIAL
+# ------------------------
+
+def aprovar_solicitacao(solicitacao_id):
+    """Aprova uma solicitação de férias pendente."""
+    conn = get_conn()
+    c = conn.cursor()
+    
+    c.execute("""
+        UPDATE solicitacoes
+        SET status = 'APROVADO', data_aprovacao = ?
+        WHERE id = ?
+    """, (datetime.now().isoformat(), solicitacao_id))
+    
+    conn.commit()
+    conn.close()
+    return True, "Solicitação aprovada com sucesso!"
+
+def reprovar_solicitacao(solicitacao_id, motivo):
+    """Reprova uma solicitação de férias pendente."""
+    conn = get_conn()
+    c = conn.cursor()
+    
+    c.execute("""
+        UPDATE solicitacoes
+        SET status = 'REPROVADO', motivo_rejeicao = ?
+        WHERE id = ?
+    """, (motivo, solicitacao_id))
+    
+    conn.commit()
+    conn.close()
+    return True, "Solicitação reprovada."
+
+# ------------------------
+# NOTIFICAÇÕES
+# ------------------------
+
+def gerar_link_whatsapp(mensagem):
+    """Gera link para WhatsApp com mensagem codificada."""
+    return "https://wa.me/?text=" + urllib.parse.quote(mensagem)
+
+# ------------------------
 # CALENDÁRIO INTELIGENTE
 # ------------------------
 
@@ -399,7 +445,7 @@ def gerar_calendario_mes(ano, mes):
             SELECT s.id, c.nome, s.data_inicio, s.dias, s.status, s.tipo_divisao
             FROM solicitacoes s
             JOIN colaboradores c ON s.colaborador_id = c.id
-            WHERE s.status IN ('APROVADO', 'PENDENTE', 'EM_ANDAMENTO')
+            WHERE s.status = 'APROVADO'
             AND DATE(s.data_inicio) <= ?
             AND DATE(s.data_inicio, '+' || (s.dias - 1) || ' days') >= ?
         """, conn, params=(dia_str, dia_str))
@@ -653,6 +699,7 @@ if token:
             else:
                 # Verificar alerta de conflito (não bloqueante)
                 tem_alerta, colegas_conflito = verificar_alerta_conflito(colaborador_id, data_inicio, dias)
+                confirmar_conflito = False
 
                 if tem_alerta:
                     st.warning("⚠️ Alerta de Conflito de Equipe")
@@ -673,23 +720,26 @@ if token:
                         )
 
                     # Checkbox para confirmar
-                    confirmar = st.checkbox(
+                    confirmar_conflito = st.checkbox(
                         "✅ Entendo o conflito e desejo continuar com a solicitação",
                         key="confirmar_conflito"
                     )
 
-                    if not confirmar:
+                    if not confirmar_conflito:
                         st.info("💡 Você pode usar a aba 'Calendário' para encontrar datas com menor conflito.")
                         st.stop()
 
-                # Salvar solicitação
+                # Salvar solicitação com status PENDENTE
+                # Se houve conflito confirmado, marcar como PENDENTE_ANALISE
+                status_inicial = "PENDENTE_ANALISE" if tem_alerta else "PENDENTE"
+                
                 conn = get_conn()
                 c = conn.cursor()
 
                 c.execute("""
-                    INSERT INTO solicitacoes (colaborador_id, data_inicio, dias, tipo_divisao, status)
-                    VALUES (?, ?, ?, ?, 'APROVADO')
-                """, (colaborador_id, str(data_inicio), dias, tipo_divisao))
+                    INSERT INTO solicitacoes (colaborador_id, data_inicio, dias, tipo_divisao, status, tem_conflito)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (colaborador_id, str(data_inicio), dias, tipo_divisao, status_inicial, 1 if tem_alerta else 0))
 
                 # Marcar token como usado
                 c.execute(
@@ -700,7 +750,37 @@ if token:
                 conn.commit()
                 conn.close()
 
-                st.success("✅ Solicitação aprovada automaticamente!")
+                st.success("📝 Solicitação enviada para aprovação!")
+                st.info("⏳ Sua solicitação será analisada pelo gerente. Você receberá um retorno em breve.")
+                
+                # Buscar telefone do gestor e oferecer notificação
+                conn_notify = get_conn()
+                gestor_df = pd.read_sql(
+                    "SELECT telefone FROM colaboradores WHERE nome = 'Adeilson de Oliveira'",
+                    conn_notify
+                )
+                conn_notify.close()
+                
+                if not gestor_df.empty and pd.notna(gestor_df.iloc[0]["telefone"]):
+                    gestor_telefone = gestor_df.iloc[0]["telefone"]
+                    data_fim_str = (data_inicio + timedelta(days=dias - 1)).strftime("%d/%m/%Y")
+                    data_inicio_str = data_inicio.strftime("%d/%m/%Y")
+                    
+                    mensagem_gestor = (
+                        f"🔔 Nova solicitação de férias:\n"
+                        f"Nome: {nome}\n"
+                        f"Início: {data_inicio_str}\n"
+                        f"Fim: {data_fim_str}\n"
+                        f"Dias: {dias}\n"
+                        f"Tipo: {tipo_divisao}\n"
+                        f"\nAcesse o sistema para aprovar."
+                    )
+                    
+                    wa_link_gestor = gerar_link_whatsapp(mensagem_gestor)
+                    st.divider()
+                    st.subheader("📱 Notificar Gestor")
+                    st.link_button("📲 Enviar Notificação via WhatsApp", wa_link_gestor)
+                
                 st.balloons()
 
     else:
@@ -731,7 +811,49 @@ else:
         if df.empty:
             st.warning("Nenhum colaborador encontrado.")
         else:
+            st.subheader("📋 Lista de Colaboradores")
             st.dataframe(df, use_container_width=True)
+            
+            st.divider()
+            st.subheader("📱 Editar Telefone")
+            
+            conn = get_conn()
+            df_colab = pd.read_sql("SELECT id, nome, telefone FROM colaboradores ORDER BY nome", conn)
+            conn.close()
+            
+            if not df_colab.empty:
+                nome_selecionado = st.selectbox(
+                    "Selecione o colaborador",
+                    df_colab["nome"].tolist(),
+                    key="edit_telefone_select"
+                )
+                
+                # Buscar telefone atual
+                row_colab = df_colab[df_colab["nome"] == nome_selecionado].iloc[0]
+                colab_id = row_colab["id"]
+                telefone_atual = row_colab["telefone"] if pd.notna(row_colab["telefone"]) else ""
+                
+                novo_telefone = st.text_input(
+                    "Telefone (com DDD, ex: 11999999999)",
+                    value=telefone_atual,
+                    placeholder="11999999999",
+                    key="edit_telefone_input"
+                )
+                
+                if st.button("💾 Salvar Telefone", key="save_telefone"):
+                    if novo_telefone.strip():
+                        conn = get_conn()
+                        c = conn.cursor()
+                        c.execute(
+                            "UPDATE colaboradores SET telefone = ? WHERE id = ?",
+                            (novo_telefone, colab_id)
+                        )
+                        conn.commit()
+                        conn.close()
+                        st.success(f"✅ Telefone de {nome_selecionado} atualizado!")
+                        st.rerun()
+                    else:
+                        st.warning("Por favor, insira um telefone.")
 
     # Tab 2: Gerar Links
     with tab2:
@@ -762,21 +884,156 @@ else:
 
     # Tab 3: Solicitações
     with tab3:
-        st.header("Solicitações de Férias")
+        st.header("📋 Solicitações de Férias - Aprovação Gerencial")
 
+        # Filtros
+        col1, col2 = st.columns(2)
+        with col1:
+            filtro_status = st.selectbox(
+                "Filtrar por status",
+                ["TODAS", "PENDENTE", "PENDENTE_ANALISE", "APROVADO", "REPROVADO"],
+                index=0
+            )
+        
+        with col2:
+            st.write("")  # Espaço
+
+        # Buscar solicitações
         conn = get_conn()
-        df = pd.read_sql("""
-            SELECT s.id, c.nome, s.data_inicio, s.dias, s.tipo_divisao, s.status, s.criado_em
-            FROM solicitacoes s
-            JOIN colaboradores c ON s.colaborador_id = c.id
-            ORDER BY s.criado_em DESC
-        """, conn)
+        if filtro_status == "TODAS":
+            df = pd.read_sql("""
+                SELECT s.id, c.nome, s.data_inicio, s.dias, s.tipo_divisao, s.status, s.criado_em, s.tem_conflito, s.data_aprovacao, s.motivo_rejeicao
+                FROM solicitacoes s
+                JOIN colaboradores c ON s.colaborador_id = c.id
+                ORDER BY 
+                    CASE 
+                        WHEN s.status = 'PENDENTE_ANALISE' THEN 0
+                        WHEN s.status = 'PENDENTE' THEN 1
+                        WHEN s.status = 'APROVADO' THEN 2
+                        WHEN s.status = 'REPROVADO' THEN 3
+                    END,
+                    s.criado_em DESC
+            """, conn)
+        else:
+            df = pd.read_sql("""
+                SELECT s.id, c.nome, s.data_inicio, s.dias, s.tipo_divisao, s.status, s.criado_em, s.tem_conflito, s.data_aprovacao, s.motivo_rejeicao
+                FROM solicitacoes s
+                JOIN colaboradores c ON s.colaborador_id = c.id
+                WHERE s.status = ?
+                ORDER BY s.criado_em DESC
+            """, conn, params=(filtro_status,))
         conn.close()
 
         if df.empty:
-            st.info("Nenhuma solicitação encontrada.")
+            st.info("Nenhuma solicitação encontrada com esse filtro.")
         else:
-            st.dataframe(df, use_container_width=True)
+            # Exibir cada solicitação com opções de aprovação
+            for idx, row in df.iterrows():
+                # Definir cor baseada no status
+                status_colors = {
+                    "PENDENTE": "🟡",
+                    "PENDENTE_ANALISE": "🔴",
+                    "APROVADO": "🟢",
+                    "REPROVADO": "⚫"
+                }
+                
+                status_emoji = status_colors.get(row["status"], "⚪")
+                conflito_emoji = "⚠️" if row["tem_conflito"] else ""
+
+                with st.container(border=True):
+                    col1, col2, col3 = st.columns([2, 3, 2])
+                    
+                    with col1:
+                        st.write(f"**{row['nome']}**")
+                        st.write(f"📅 {row['data_inicio']} ({row['dias']} dias)")
+                        st.write(f"📌 {row['tipo_divisao']}")
+                    
+                    with col2:
+                        st.write(f"Status: {status_emoji} **{row['status']}** {conflito_emoji}")
+                        if row["status"] == "REPROVADO" and row["motivo_rejeicao"]:
+                            st.error(f"Motivo: {row['motivo_rejeicao']}")
+                        if row["status"] == "APROVADO" and row["data_aprovacao"]:
+                            data_aprov = datetime.fromisoformat(row["data_aprovacao"]).strftime("%d/%m/%Y %H:%M")
+                            st.success(f"Aprovado em: {data_aprov}")
+                    
+                    with col3:
+                        # Botões de ação (apenas para PENDENTE/PENDENTE_ANALISE)
+                        if row["status"] in ["PENDENTE", "PENDENTE_ANALISE"]:
+                            col_btn1, col_btn2 = st.columns(2)
+                            
+                            with col_btn1:
+                                if st.button("✅ Aprovar", key=f"aprovar_{row['id']}"):
+                                    aprovar_solicitacao(row["id"])
+                                    
+                                    # Notificar funcionário
+                                    conn_notify = get_conn()
+                                    func_df = pd.read_sql(
+                                        "SELECT telefone FROM colaboradores WHERE nome = ?",
+                                        conn_notify,
+                                        params=(row["nome"],)
+                                    )
+                                    conn_notify.close()
+                                    
+                                    if not func_df.empty and pd.notna(func_df.iloc[0]["telefone"]):
+                                        tel_func = func_df.iloc[0]["telefone"]
+                                        msg_aprovacao = f"✅ Sua solicitação de férias de {row['dias']} dias iniciando em {row['data_inicio']} foi APROVADA!"
+                                        st.session_state[f"wa_link_approve_{row['id']}"] = gerar_link_whatsapp(msg_aprovacao)
+                                    
+                                    st.success("Solicitação aprovada!")
+                                    st.rerun()
+                            
+                            with col_btn2:
+                                if st.button("❌ Reprovar", key=f"reprovar_btn_{row['id']}"):
+                                    st.session_state[f"expand_reject_{row['id']}"] = True
+                            
+                            # Campo de motivo para reprovação
+                            if st.session_state.get(f"expand_reject_{row['id']}", False):
+                                with st.expander("Motivo da Rejeição", expanded=True):
+                                    motivo = st.text_input(
+                                        "Motivo",
+                                        key=f"motivo_{row['id']}",
+                                        placeholder="Ex: Conflito de equipe, período bloqueado..."
+                                    )
+                                    if st.button("Confirmar Rejeição", key=f"confirm_reprovar_{row['id']}"):
+                                        if motivo.strip():
+                                            reprovar_solicitacao(row["id"], motivo)
+                                            
+                                            # Notificar funcionário
+                                            conn_notify = get_conn()
+                                            func_df = pd.read_sql(
+                                                "SELECT telefone FROM colaboradores WHERE nome = ?",
+                                                conn_notify,
+                                                params=(row["nome"],)
+                                            )
+                                            conn_notify.close()
+                                            
+                                            if not func_df.empty and pd.notna(func_df.iloc[0]["telefone"]):
+                                                tel_func = func_df.iloc[0]["telefone"]
+                                                msg_rejeicao = f"❌ Sua solicitação de férias foi REPROVADA.\nMotivo: {motivo}"
+                                                st.session_state[f"wa_link_reject_{row['id']}"] = gerar_link_whatsapp(msg_rejeicao)
+                                            
+                                            st.error("Solicitação reprovada!")
+                                            st.session_state[f"expand_reject_{row['id']}"] = False
+                                            st.rerun()
+                                        else:
+                                            st.warning("Por favor, insira um motivo para a rejeição.")
+                        
+                        # Mostrar botão de notificação se necessário
+                        if st.session_state.get(f"wa_link_approve_{row['id']}"):
+                            st.divider()
+                            st.link_button(
+                                "📲 Notificar Funcionário (Aprovação)",
+                                st.session_state[f"wa_link_approve_{row['id']}"],
+                                key=f"notify_approve_{row['id']}"
+                            )
+                        
+                        if st.session_state.get(f"wa_link_reject_{row['id']}"):
+                            st.divider()
+                            st.link_button(
+                                "📲 Notificar Funcionário (Rejeição)",
+                                st.session_state[f"wa_link_reject_{row['id']}"],
+                                key=f"notify_reject_{row['id']}"
+                            )
 
     # Tab 4: Calendário
     with tab4:
