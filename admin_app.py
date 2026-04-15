@@ -104,12 +104,18 @@ def init_db():
 
 def importar_equipe():
     try:
-        df = pd.read_excel("ferias_equipe.xlsx")
+    df = pd.read_excel("ferias_equipe.xlsx")
+except Exception:
+    st.warning("Excel não carregado - seguindo com base existente")
+    return
 
         conn = get_conn()
         c = conn.cursor()
 
-        c.execute("DELETE FROM colaboradores")
+        qtd = c.execute("SELECT COUNT(*) FROM colaboradores").fetchone()[0]
+
+if qtd > 0:
+    return
 
         for _, row in df.iterrows():
             nome = str(row.get("Nome_Completo","")).strip()
@@ -158,18 +164,29 @@ def validar_janela(data):
 def init_controle_ferias():
     conn = get_conn()
     c = conn.cursor()
+
     c.execute("""
-        CREATE TABLE IF NOT EXISTS controle_ferias (
-            colaborador_id INTEGER PRIMARY KEY,
-            saldo_total INTEGER DEFAULT 30,
-            saldo_utilizado INTEGER DEFAULT 0,
-            FOREIGN KEY (colaborador_id) REFERENCES colaboradores(id)
-        )
+    CREATE TABLE IF NOT EXISTS controle_ferias (
+        colaborador_id INTEGER PRIMARY KEY,
+        saldo_total INTEGER DEFAULT 30,
+        saldo_utilizado INTEGER DEFAULT 0
+    )
     """)
+
+    c.execute("SELECT id FROM colaboradores")
+    colaboradores = c.fetchall()
+
+    for col in colaboradores:
+        c.execute("SELECT id FROM colaboradores")
+colaboradores = c.fetchall()
+
+for col in colaboradores:
     c.execute("""
-        INSERT OR IGNORE INTO controle_ferias (colaborador_id, saldo_total, saldo_utilizado)
-        SELECT id, 30, 0 FROM colaboradores
-    """)
+        INSERT OR IGNORE INTO controle_ferias 
+        (colaborador_id, saldo_total, saldo_utilizado)
+        VALUES (?, 30, 0)
+    """, (col[0],))
+
     conn.commit()
     conn.close()
 
