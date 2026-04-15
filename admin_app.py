@@ -102,36 +102,22 @@ def init_db():
 # IMPORTAÇÃO EXCEL
 # ------------------------
 
-def importar_equipe():
-    try:
-    df = pd.read_excel("ferias_equipe.xlsx")
-except Exception:
-    st.warning("Excel não carregado - seguindo com base existente")
-    return
+def init_controle_ferias():
+    conn = get_conn()
+    c = conn.cursor()
 
-        conn = get_conn()
-        c = conn.cursor()
+    c.execute("SELECT id FROM colaboradores")
+    colaboradores = c.fetchall()
 
-        qtd = c.execute("SELECT COUNT(*) FROM colaboradores").fetchone()[0]
+    for col in colaboradores:
+        c.execute("""
+            INSERT OR IGNORE INTO controle_ferias 
+            (colaborador_id, saldo_total, saldo_utilizado)
+            VALUES (?, 30, 0)
+        """, (col[0],))
 
-if qtd > 0:
-    return
-
-        for _, row in df.iterrows():
-            nome = str(row.get("Nome_Completo","")).strip()
-            telefone = str(row.get("Telefone","")).strip()
-            email = str(row.get("Email","")).strip()
-            cargo = str(row.get("Cargo","")).strip()
-
-            if nome:
-                c.execute("""
-                    INSERT INTO colaboradores (nome, telefone, email, cargo)
-                    VALUES (?, ?, ?, ?)
-                """, (nome, telefone, email, cargo))
-
-        conn.commit()
-        conn.close()
-        init_controle_ferias()
+    conn.commit()
+    conn.close()  
 
     except Exception as e:
         st.error(f"Erro Excel: {e}")
