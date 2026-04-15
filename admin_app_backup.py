@@ -1,7 +1,3 @@
-
-import streamlit as st
-
-try:
 import streamlit as st
 import sqlite3
 import uuid
@@ -155,27 +151,20 @@ def importar_equipe():
         st.warning(f"Erro ao importar equipe: {e}")
 
 
-
 def init_controle_ferias():
-    try:
-        conn = get_conn()
-        c = conn.cursor()
+    conn = get_conn()
+    c = conn.cursor()
 
-        colaboradores = c.execute("SELECT id FROM colaboradores").fetchall()
+    colaboradores = c.execute("SELECT id FROM colaboradores").fetchall()
 
-        for col in colaboradores:
-            c.execute("""
-                INSERT OR IGNORE INTO controle_ferias 
-                (colaborador_id, saldo_total, saldo_utilizado)
-                VALUES (?, 30, 0)
-            """, (col[0],))
+    for col in colaboradores:
+        c.execute(
+            "INSERT OR IGNORE INTO controle_ferias (colaborador_id, saldo_total, saldo_utilizado) VALUES (?, ?, ?)",
+            (col[0], 30, 0)
+        )
 
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        import streamlit as st
-        st.warning(f"Erro ao inicializar controle de férias: {e}")
-
+    conn.commit()
+    conn.close()
 
 # ------------------------
 # VALIDAÇÕES
@@ -539,6 +528,3 @@ else:
         if not df.empty:
             csv = df.to_csv(index=False, encoding='utf-8-sig')
             st.download_button("Exportar CSV", csv, file_name='ferias_aprovadas.csv', mime='text/csv')
-
-except Exception as e:
-    st.error(f"Erro geral: {e}")
