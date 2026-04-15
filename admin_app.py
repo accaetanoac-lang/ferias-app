@@ -87,8 +87,9 @@ def init_db():
     )
     """)
 
+    c.execute("DROP TABLE IF EXISTS controle_ferias")
     c.execute("""
-    CREATE TABLE IF NOT EXISTS controle_ferias (
+    CREATE TABLE controle_ferias (
         colaborador_id INTEGER PRIMARY KEY,
         saldo_total INTEGER DEFAULT 30,
         saldo_utilizado INTEGER DEFAULT 0,
@@ -294,7 +295,10 @@ init_db()
 importar_equipe()
 init_controle_ferias()
 
-BASE_URL = st.secrets.get("BASE_URL", "http://localhost:8501")
+if "BASE_URL" in st.secrets:
+    BASE_URL = st.secrets["BASE_URL"]
+else:
+    BASE_URL = "http://localhost:8501"
 params = st.query_params
 token = params.get("token")
 
