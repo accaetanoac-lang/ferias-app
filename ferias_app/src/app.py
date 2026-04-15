@@ -1,3 +1,5 @@
+st.write("VERSAO NOVA FUNCIONANDO")
+
 import streamlit as st
 import sqlite3
 import uuid
