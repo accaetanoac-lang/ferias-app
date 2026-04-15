@@ -154,26 +154,15 @@ def init_controle_ferias():
     conn = get_conn()
     c = conn.cursor()
 
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS controle_ferias (
-        colaborador_id INTEGER PRIMARY KEY,
-        saldo_total INTEGER DEFAULT 30,
-        saldo_utilizado INTEGER DEFAULT 0
-    )
-    """)
-
     c.execute("SELECT id FROM colaboradores")
     colaboradores = c.fetchall()
 
     for col in colaboradores:
-        c.execute(
-            """
+        c.execute("""
             INSERT OR IGNORE INTO controle_ferias 
             (colaborador_id, saldo_total, saldo_utilizado)
             VALUES (?, 30, 0)
-            """,
-            (col[0],),
-        )
+        """, (col[0],))
 
     conn.commit()
     conn.close()
