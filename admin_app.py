@@ -4,9 +4,9 @@ import uuid
 import pandas as pd
 import urllib.parse
 
-st.set_page_config(page_title="Gestão de Férias", layout="wide")
+from ferias import EQUIPE
 
-st.write("VERSAO NOVA FUNCIONANDO")
+st.set_page_config(page_title="Gestão de Férias", layout="wide")
 
 # ------------------------
 # BANCO
@@ -48,7 +48,32 @@ def init_db():
     conn.commit()
     conn.close()
 
+# ------------------------
+# IMPORTAÇÃO AUTOMÁTICA (EQUIPE FIXA)
+# ------------------------
+
+def importar_equipe():
+    conn = get_conn()
+    c = conn.cursor()
+
+    # SEMPRE limpa e recria (sincronização total)
+    c.execute("DELETE FROM colaboradores")
+
+    for nome in EQUIPE.keys():
+        c.execute(
+            "INSERT INTO colaboradores (nome) VALUES (?)",
+            (nome,)
+        )
+
+    conn.commit()
+    conn.close()
+
+# ------------------------
+# INIT
+# ------------------------
+
 init_db()
+importar_equipe()
 
 # ------------------------
 # TOKEN
@@ -59,7 +84,10 @@ def gerar_token(colaborador_id):
     conn = get_conn()
     c = conn.cursor()
 
-    c.execute("INSERT INTO tokens (colaborador_id, token) VALUES (?, ?)", (colaborador_id, token))
+    c.execute(
+        "INSERT INTO tokens (colaborador_id, token) VALUES (?, ?)",
+        (colaborador_id, token)
+    )
 
     conn.commit()
     conn.close()
@@ -70,7 +98,10 @@ def validar_token(token):
     conn = get_conn()
     c = conn.cursor()
 
-    c.execute("SELECT colaborador_id, usado FROM tokens WHERE token = ?", (token,))
+    c.execute(
+        "SELECT colaborador_id, usado FROM tokens WHERE token = ?",
+        (token,)
+    )
     result = c.fetchone()
 
     conn.close()
@@ -80,13 +111,13 @@ def validar_token(token):
     return None
 
 # ------------------------
-# BASE URL (IMPORTANTE)
+# BASE URL
 # ------------------------
 
 BASE_URL = st.secrets.get("BASE_URL", "http://localhost:8501")
 
 # ------------------------
-# URL PARAM
+# PARAMETROS
 # ------------------------
 
 params = st.query_params
@@ -114,7 +145,10 @@ if token:
                 VALUES (?, ?, ?, 'PENDENTE')
             """, (colaborador_id, str(data_inicio), dias))
 
-            c.execute("UPDATE tokens SET usado = 1 WHERE token = ?", (token,))
+            c.execute(
+                "UPDATE tokens SET usado = 1 WHERE token = ?",
+                (token,)
+            )
 
             conn.commit()
             conn.close()
@@ -131,51 +165,57 @@ if token:
 else:
     st.title("Painel Administrativo")
 
-    tab1, tab2, tab3 = st.tabs(["Colaboradores", "Gerar Links", "Solicitações"])
+    tab1, tab2, tab3 = st.tabs([
+        "Colaboradores",
+        "Gerar Links",
+        "Solicitações"
+    ])
 
+    # ------------------------
     # COLABORADORES
+    # ------------------------
     with tab1:
-        nome = st.text_input("Nome")
-
-        if st.button("Salvar"):
-            conn = get_conn()
-            c = conn.cursor()
-            c.execute("INSERT INTO colaboradores (nome) VALUES (?)", (nome,))
-            conn.commit()
-            conn.close()
-            st.success("Salvo!")
-
         conn = get_conn()
         df = pd.read_sql("SELECT * FROM colaboradores", conn)
         conn.close()
-        st.dataframe(df)
 
+        st.dataframe(df, use_container_width=True)
+
+    # ------------------------
     # GERAR LINKS
+    # ------------------------
     with tab2:
         conn = get_conn()
         df = pd.read_sql("SELECT * FROM colaboradores", conn)
         conn.close()
-        st.dataframe(df)
 
-        colaborador_id = st.number_input("ID", step=1)
+        if df.empty:
+            st.warning("Nenhum colaborador encontrado")
+        else:
+            nome = st.selectbox("Colaborador", df["nome"])
 
-        if st.button("Gerar Link"):
-            token = gerar_token(colaborador_id)
+            colaborador_id = df[df["nome"] == nome]["id"].values[0]
 
-            link = f"{BASE_URL}/?token={token}"
+            if st.button("Gerar Link"):
+                token = gerar_token(colaborador_id)
 
-            mensagem = f"Olá, favor preencher suas férias: {link}"
-            mensagem_encoded = urllib.parse.quote(mensagem)
+                link = f"{BASE_URL}?token={token}"
 
-            wa_link = f"https://wa.me/?text={mensagem_encoded}"
+                mensagem = f"Olá {nome}, favor preencher suas férias: {link}"
+                mensagem_encoded = urllib.parse.quote(mensagem)
 
-            st.success("Link gerado")
-            st.code(link)
-            st.link_button("Enviar WhatsApp", wa_link)
+                wa_link = f"https://wa.me/?text={mensagem_encoded}"
 
+                st.success("Link gerado")
+                st.code(link)
+                st.link_button("Enviar WhatsApp", wa_link)
+
+    # ------------------------
     # SOLICITAÇÕES
+    # ------------------------
     with tab3:
         conn = get_conn()
         df = pd.read_sql("SELECT * FROM solicitacoes", conn)
         conn.close()
-        st.dataframe(df)
+
+        st.dataframe(df, use_container_width=True)
