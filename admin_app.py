@@ -1,10 +1,12 @@
-st.write("VERSAO NOVA FUNCIONANDO")
-
 import streamlit as st
 import sqlite3
 import uuid
 import pandas as pd
 import urllib.parse
+
+st.set_page_config(page_title="Gestão de Férias", layout="wide")
+
+st.write("VERSAO NOVA FUNCIONANDO")
 
 # ------------------------
 # BANCO
@@ -78,6 +80,12 @@ def validar_token(token):
     return None
 
 # ------------------------
+# BASE URL (IMPORTANTE)
+# ------------------------
+
+BASE_URL = st.secrets.get("BASE_URL", "http://localhost:8501")
+
+# ------------------------
 # URL PARAM
 # ------------------------
 
@@ -112,6 +120,7 @@ if token:
             conn.close()
 
             st.success("Enviado com sucesso!")
+
     else:
         st.error("Link inválido ou já usado")
 
@@ -138,12 +147,14 @@ else:
 
         conn = get_conn()
         df = pd.read_sql("SELECT * FROM colaboradores", conn)
+        conn.close()
         st.dataframe(df)
 
     # GERAR LINKS
     with tab2:
         conn = get_conn()
         df = pd.read_sql("SELECT * FROM colaboradores", conn)
+        conn.close()
         st.dataframe(df)
 
         colaborador_id = st.number_input("ID", step=1)
@@ -151,7 +162,7 @@ else:
         if st.button("Gerar Link"):
             token = gerar_token(colaborador_id)
 
-            link = f"http://localhost:8501/?token={token}"
+            link = f"{BASE_URL}/?token={token}"
 
             mensagem = f"Olá, favor preencher suas férias: {link}"
             mensagem_encoded = urllib.parse.quote(mensagem)
@@ -166,4 +177,5 @@ else:
     with tab3:
         conn = get_conn()
         df = pd.read_sql("SELECT * FROM solicitacoes", conn)
+        conn.close()
         st.dataframe(df)
