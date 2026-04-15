@@ -158,8 +158,8 @@ def init_controle_ferias():
 
     for col in colaboradores:
         c.execute(
-            "INSERT OR IGNORE INTO controle_ferias (colaborador_id, saldo_total, saldo_utilizado) VALUES (?, 30, 0)",
-            (col[0],)
+            "INSERT OR IGNORE INTO controle_ferias (colaborador_id, saldo_total, saldo_utilizado) VALUES (?, ?, ?)",
+            (col[0], 30, 0)
         )
 
     conn.commit()
