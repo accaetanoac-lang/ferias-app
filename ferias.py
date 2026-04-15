@@ -19,6 +19,21 @@ EQUIPE = {
     "Marinilson Mota de Lira": "Supervisor de Serviços"
 }
 
+# --- 1.1 LIMITES POR EQUIPE ---
+LIMITES_EQUIPE = {
+    "Consultor Técnico": 2,      # Máximo 2 consultores por dia
+    "Auxiliar Técnico": 1,       # Máximo 1 auxiliar por dia
+    "Assist. Técnico Jr": 1,     # Máximo 1 junior por dia
+    "Assist. Técnico Sr": 1,     # Máximo 1 senior por dia
+    "Assistênte Técnico": 1,     # Máximo 1 assistente por dia
+    "Gestor de Frotas": 1,       # Máximo 1 gestor por dia
+    "Analista de Garantia": 1,   # Máximo 1 analista por dia
+    "Assist. Administrativo": 1, # Máximo 1 administrativo por dia
+    "Assist. Adm. Serviços": 1,  # Máximo 1 adm serviços por dia
+    "Gerente de Serviços": 1,    # Máximo 1 gerente por dia
+    "Supervisor de Serviços": 1  # Máximo 1 supervisor por dia
+}
+
 # Inicializa feriados do Brasil para detecção automática
 feriados_br = holidays.BR()
 

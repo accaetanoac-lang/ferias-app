@@ -5,7 +5,7 @@ import pandas as pd
 import urllib.parse
 from datetime import datetime, timedelta, date
 
-from ferias import EQUIPE
+from ferias import EQUIPE, LIMITES_EQUIPE
 
 st.set_page_config(page_title="Gestão de Férias", layout="wide")
 
@@ -228,7 +228,7 @@ def validar_divisao(tipo_divisao, dias):
 
     return True, "Divisão válida."
 
-def validar_solicitacao(nome, data_inicio, dias):
+def validar_solicitacao(nome, data_inicio, dias, colaborador_id=None):
     """Validação final usando regras de negócio."""
     if nome not in EQUIPE:
         return False, "Funcionário não encontrado na equipe."
@@ -258,7 +258,209 @@ def validar_solicitacao(nome, data_inicio, dias):
         if dias > saldo:
             return False, f"Saldo insuficiente. Disponível: {saldo} dias."
 
+    # Verificar conflito de equipe (se colaborador_id fornecido)
+    if colaborador_id:
+        conflito, msg_conflito = verificar_conflito_equipe(data_inicio, dias, colaborador_id)
+        if conflito:
+            return False, msg_conflito
+
     return True, "Solicitação válida."
+
+# ------------------------
+# CALENDÁRIO INTELIGENTE
+# ------------------------
+
+def verificar_conflito_equipe(data_inicio, dias, colaborador_id):
+    """Verifica se há conflito de equipe na data especificada."""
+    # Buscar cargo do colaborador
+    conn = get_conn()
+    df_colab = pd.read_sql("""
+        SELECT c.nome FROM colaboradores c WHERE c.id = ?
+    """, conn, params=(colaborador_id,))
+    conn.close()
+
+    if df_colab.empty:
+        return False, "Colaborador não encontrado."
+
+    nome = df_colab.iloc[0]["nome"]
+    cargo = EQUIPE.get(nome)
+
+    if not cargo:
+        return False, "Cargo não encontrado."
+
+    limite = LIMITES_EQUIPE.get(cargo, 1)
+
+    # Calcular período das férias
+    data_fim = data_inicio + timedelta(days=dias - 1)
+
+    # Buscar solicitações aprovadas no período
+    conn = get_conn()
+    df_solicitacoes = pd.read_sql("""
+        SELECT s.colaborador_id, c.nome
+        FROM solicitacoes s
+        JOIN colaboradores c ON s.colaborador_id = c.id
+        WHERE s.status = 'APROVADO'
+        AND (
+            (s.data_inicio <= ? AND DATE(s.data_inicio, '+' || (s.dias - 1) || ' days') >= ?) OR
+            (s.data_inicio <= ? AND DATE(s.data_inicio, '+' || (s.dias - 1) || ' days') >= ?) OR
+            (s.data_inicio >= ? AND DATE(s.data_inicio, '+' || (s.dias - 1) || ' days') <= ?)
+        )
+    """, conn, params=(str(data_inicio), str(data_inicio), str(data_fim), str(data_fim), str(data_inicio), str(data_fim)))
+    conn.close()
+
+    # Contar quantos do mesmo cargo estão de férias
+    colegas_cargo = [row["nome"] for _, row in df_solicitacoes.iterrows() if EQUIPE.get(row["nome"]) == cargo]
+
+    if len(colegas_cargo) >= limite:
+        return True, f"Conflito: {len(colegas_cargo)}/{limite} {cargo}s já de férias."
+
+    return False, f"OK: {len(colegas_cargo)}/{limite} {cargo}s de férias."
+
+def gerar_calendario_mes(ano, mes):
+    """Gera dados do calendário para um mês específico."""
+    from calendar import monthrange
+
+    # Dias do mês
+    _, ultimo_dia = monthrange(ano, mes)
+    dias_mes = [date(ano, mes, dia) for dia in range(1, ultimo_dia + 1)]
+
+    calendario = {}
+
+    for dia in dias_mes:
+        dia_str = dia.strftime("%Y-%m-%d")
+
+        # Buscar solicitações para este dia
+        conn = get_conn()
+        df_dia = pd.read_sql("""
+            SELECT s.id, c.nome, s.data_inicio, s.dias, s.status, s.tipo_divisao
+            FROM solicitacoes s
+            JOIN colaboradores c ON s.colaborador_id = c.id
+            WHERE s.status IN ('APROVADO', 'PENDENTE', 'EM_ANDAMENTO')
+            AND DATE(s.data_inicio) <= ?
+            AND DATE(s.data_inicio, '+' || (s.dias - 1) || ' days') >= ?
+        """, conn, params=(dia_str, dia_str))
+        conn.close()
+
+        ferias_dia = []
+        status_dia = "NORMAL"
+        conflito = False
+
+        for _, row in df_dia.iterrows():
+            nome = row["nome"]
+            cargo = EQUIPE.get(nome, "Desconhecido")
+            status = row["status"]
+            tipo = row["tipo_divisao"]
+
+            ferias_dia.append({
+                "nome": nome,
+                "cargo": cargo,
+                "status": status,
+                "tipo": tipo
+            })
+
+            # Verificar conflito de equipe
+            limite = LIMITES_EQUIPE.get(cargo, 1)
+            colegas_cargo = [f for f in ferias_dia if f["cargo"] == cargo]
+
+            if len(colegas_cargo) > limite:
+                conflito = True
+
+        # Determinar status do dia
+        if conflito:
+            status_dia = "CONFLITO"
+        elif ferias_dia:
+            # Verificar se há diferentes status
+            statuses = set(f["status"] for f in ferias_dia)
+            if len(statuses) > 1:
+                status_dia = "MISTO"
+            elif "APROVADO" in statuses:
+                status_dia = "APROVADO"
+            elif "EM_ANDAMENTO" in statuses:
+                status_dia = "EM_ANDAMENTO"
+            else:
+                status_dia = "PENDENTE"
+
+        calendario[dia] = {
+            "ferias": ferias_dia,
+            "status": status_dia,
+            "conflito": conflito,
+            "quantidade": len(ferias_dia)
+        }
+
+    return calendario
+
+def sugerir_melhor_periodo(colaborador_id, dias):
+    """Sugere o melhor período disponível para férias."""
+    from calendar import monthrange
+
+    # Buscar informações do colaborador
+    conn = get_conn()
+    df_colab = pd.read_sql("""
+        SELECT c.nome FROM colaboradores c WHERE c.id = ?
+    """, conn, params=(colaborador_id,))
+    conn.close()
+
+    if df_colab.empty:
+        return None, "Colaborador não encontrado."
+
+    nome = df_colab.iloc[0]["nome"]
+    cargo = EQUIPE.get(nome)
+
+    if not cargo:
+        return None, "Cargo não encontrado."
+
+    limite = LIMITES_EQUIPE.get(cargo, 1)
+
+    # Analisar próximos 6 meses
+    hoje = date.today()
+    sugestoes = []
+
+    for meses_a_frente in range(6):
+        mes_atual = hoje.month + meses_a_frente
+        ano_atual = hoje.year + (mes_atual - 1) // 12
+        mes_atual = ((mes_atual - 1) % 12) + 1
+
+        calendario = gerar_calendario_mes(ano_atual, mes_atual)
+
+        for dia, dados in calendario.items():
+            if dia < hoje:
+                continue
+
+            # Verificar se o período cabe
+            periodo_fim = dia + timedelta(days=dias - 1)
+
+            # Verificar se todo o período está livre de conflitos
+            periodo_livre = True
+            carga_maxima = 0
+
+            for d in range(dias):
+                dia_check = dia + timedelta(days=d)
+                if dia_check in calendario:
+                    dados_dia = calendario[dia_check]
+                    colegas_cargo = [f for f in dados_dia["ferias"] if f["cargo"] == cargo]
+                    if len(colegas_cargo) >= limite:
+                        periodo_livre = False
+                        break
+                    carga_maxima = max(carga_maxima, len(colegas_cargo))
+
+            if periodo_livre:
+                # Verificar validações básicas
+                valido_janela, _ = validar_janela_ferias(dia)
+                valido_data, _ = validar_data_inicio(dia)
+
+                if valido_janela and valido_data:
+                    pontuacao = (limite - carga_maxima) * 10  # Preferir períodos com menos colegas
+                    sugestoes.append({
+                        "data_inicio": dia,
+                        "data_fim": periodo_fim,
+                        "pontuacao": pontuacao,
+                        "carga_maxima": carga_maxima
+                    })
+
+    # Ordenar por pontuação (maior = melhor)
+    sugestoes.sort(key=lambda x: x["pontuacao"], reverse=True)
+
+    return sugestoes[:5], "Sugestões geradas com sucesso."  # Top 5 sugestões
 
 # ------------------------
 # TOKENS
@@ -380,8 +582,8 @@ if token:
                 st.error(f"❌ {msg}")
                 st.stop()
 
-            # Validação final com ferias.py
-            valido, msg = validar_solicitacao(nome, data_inicio, dias)
+            # Validação final
+            valido, msg = validar_solicitacao(nome, data_inicio, dias, colaborador_id)
             if not valido:
                 st.error(f"❌ {msg}")
             else:
@@ -416,10 +618,11 @@ if token:
 else:
     st.title("👨‍💼 Painel Administrativo - Gestão de Férias")
 
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📋 Colaboradores",
         "🔗 Gerar Links",
         "📅 Solicitações",
+        "📊 Calendário",
         "⚙️ Configurações"
     ])
 
@@ -480,8 +683,163 @@ else:
         else:
             st.dataframe(df, use_container_width=True)
 
-    # Tab 4: Configurações
+    # Tab 4: Calendário
     with tab4:
+        st.header("📊 Calendário de Férias")
+
+        # Selecionar mês e ano
+        col1, col2 = st.columns(2)
+        with col1:
+            ano_selecionado = st.selectbox(
+                "Ano",
+                options=[2024, 2025, 2026, 2027, 2028],
+                index=2  # 2026 por padrão
+            )
+        with col2:
+            mes_selecionado = st.selectbox(
+                "Mês",
+                options=list(range(1, 13)),
+                format_func=lambda x: ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+                                     "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"][x-1],
+                index=date.today().month - 1
+            )
+
+        if st.button("📅 Gerar Calendário"):
+            with st.spinner("Gerando calendário..."):
+                calendario = gerar_calendario_mes(ano_selecionado, mes_selecionado)
+
+            # Criar visualização em grid
+            st.subheader(f"📅 {['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+                              'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'][mes_selecionado-1]} {ano_selecionado}")
+
+            # Dias da semana como cabeçalho
+            dias_semana = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
+            cols = st.columns(7)
+            for i, dia in enumerate(dias_semana):
+                cols[i].markdown(f"**{dia}**")
+
+            # Calcular primeiro dia do mês
+            primeiro_dia = date(ano_selecionado, mes_selecionado, 1)
+            dia_semana_inicio = primeiro_dia.weekday()  # 0=seg, 6=dom
+
+            # Criar grid do mês
+            dia_atual = 1
+            from calendar import monthrange
+            _, ultimo_dia = monthrange(ano_selecionado, mes_selecionado)
+
+            for semana in range(6):  # Máximo 6 semanas por mês
+                cols = st.columns(7)
+                for dia_semana in range(7):
+                    with cols[dia_semana]:
+                        if semana == 0 and dia_semana < dia_semana_inicio:
+                            # Dias do mês anterior
+                            st.write("")
+                        elif dia_atual > ultimo_dia:
+                            # Dias do mês seguinte
+                            st.write("")
+                        else:
+                            # Dia válido do mês
+                            dia_data = date(ano_selecionado, mes_selecionado, dia_atual)
+                            dados_dia = calendario.get(dia_data, {"ferias": [], "status": "NORMAL", "quantidade": 0})
+
+                            # Determinar cor e emoji baseado no status
+                            if dados_dia["status"] == "CONFLITO":
+                                cor = "🔴"
+                                bg_color = "#ffcccc"
+                            elif dados_dia["status"] == "APROVADO":
+                                cor = "🟢"
+                                bg_color = "#ccffcc"
+                            elif dados_dia["status"] == "EM_ANDAMENTO":
+                                cor = "🔵"
+                                bg_color = "#ccccff"
+                            elif dados_dia["status"] == "PENDENTE":
+                                cor = "⚪"
+                                bg_color = "#ffffcc"
+                            else:
+                                cor = "⚫"
+                                bg_color = "#f0f0f0"
+
+                            # Criar botão/elemento clicável
+                            if dados_dia["quantidade"] > 0:
+                                if st.button(
+                                    f"{cor} {dia_atual}\n{dados_dia['quantidade']} pessoa{'s' if dados_dia['quantidade'] != 1 else ''}",
+                                    key=f"dia_{dia_atual}",
+                                    help=f"Clique para ver detalhes de {dia_data.strftime('%d/%m/%Y')}"
+                                ):
+                                    # Mostrar detalhes em um expander
+                                    with st.expander(f"📅 Detalhes de {dia_data.strftime('%d/%m/%Y')}", expanded=True):
+                                        if dados_dia["conflito"]:
+                                            st.error("🚨 CONFLITO DE EQUIPE DETECTADO!")
+
+                                        for ferias in dados_dia["ferias"]:
+                                            status_emoji = {
+                                                "APROVADO": "✅",
+                                                "EM_ANDAMENTO": "🔄",
+                                                "PENDENTE": "⏳"
+                                            }.get(ferias["status"], "❓")
+
+                                            st.write(f"{status_emoji} **{ferias['nome']}** - {ferias['cargo']} ({ferias['tipo']})")
+                            else:
+                                # Dia sem férias
+                                st.button(
+                                    f"⚫ {dia_atual}",
+                                    key=f"dia_{dia_atual}",
+                                    disabled=True,
+                                    help=f"Nenhuma férias em {dia_data.strftime('%d/%m/%Y')}"
+                                )
+
+                            dia_atual += 1
+
+                            if dia_atual > ultimo_dia:
+                                break
+
+                if dia_atual > ultimo_dia:
+                    break
+
+        # Sugestão automática
+        st.divider()
+        st.subheader("🎯 Sugestão Automática de Período")
+
+        conn = get_conn()
+        df_colaboradores = pd.read_sql("SELECT id, nome FROM colaboradores", conn)
+        conn.close()
+
+        if not df_colaboradores.empty:
+            colaborador_nome = st.selectbox(
+                "Selecione colaborador para sugestão",
+                df_colaboradores["nome"],
+                key="sugestao_colaborador"
+            )
+
+            dias_sugestao = st.selectbox(
+                "Dias de férias",
+                [15, 20, 30],
+                key="sugestao_dias"
+            )
+
+            if st.button("🔍 Sugerir Melhor Período"):
+                colaborador_id = df_colaboradores[df_colaboradores["nome"] == colaborador_nome]["id"].values[0]
+
+                with st.spinner("Analisando calendário..."):
+                    sugestoes, msg = sugerir_melhor_periodo(colaborador_id, dias_sugestao)
+
+                if sugestoes:
+                    st.success(f"✅ {len(sugestoes)} sugestões encontradas!")
+
+                    for i, sugestao in enumerate(sugestoes[:3], 1):  # Top 3
+                        with st.container():
+                            col1, col2, col3 = st.columns([2, 2, 1])
+                            with col1:
+                                st.write(f"**Sugestão {i}:** {sugestao['data_inicio'].strftime('%d/%m/%Y')} - {sugestao['data_fim'].strftime('%d/%m/%Y')}")
+                            with col2:
+                                st.write(f"Carga máxima: {sugestao['carga_maxima']} colega(s)")
+                            with col3:
+                                st.write(f"Score: {sugestao['pontuacao']}")
+                else:
+                    st.warning("Nenhuma sugestão disponível no momento.")
+
+    # Tab 5: Configurações
+    with tab5:
         st.header("Configurações do Sistema")
 
         if st.button("🔄 Reimportar Equipe"):
