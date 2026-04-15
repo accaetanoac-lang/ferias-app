@@ -317,6 +317,69 @@ def verificar_conflito_equipe(data_inicio, dias, colaborador_id):
 
     return False, f"OK: {len(colegas_cargo)}/{limite} {cargo}s de férias."
 
+def verificar_alerta_conflito(colaborador_id, data_inicio, dias):
+    """
+    Verifica se há pessoas do mesmo cargo em férias no período.
+    NÃO bloqueia, apenas alerta sobre a situação.
+    
+    Retorna: (tem_alerta: bool, lista_colegas: list)
+    """
+    # Buscar cargo do colaborador
+    conn = get_conn()
+    df_colab = pd.read_sql("""
+        SELECT c.nome FROM colaboradores c WHERE c.id = ?
+    """, conn, params=(colaborador_id,))
+    conn.close()
+
+    if df_colab.empty:
+        return False, []
+
+    nome = df_colab.iloc[0]["nome"]
+    cargo = EQUIPE.get(nome)
+
+    if not cargo:
+        return False, []
+
+    # Calcular período das férias
+    data_fim = data_inicio + timedelta(days=dias - 1)
+
+    # Buscar solicitações APROVADAS ou EM_ANDAMENTO no período (excluindo o próprio)
+    conn = get_conn()
+    df_conflitos = pd.read_sql("""
+        SELECT DISTINCT c.nome, s.data_inicio, s.dias, s.status
+        FROM solicitacoes s
+        JOIN colaboradores c ON s.colaborador_id = c.id
+        WHERE s.colaborador_id != ?
+        AND s.status IN ('APROVADO', 'EM_ANDAMENTO')
+        AND (
+            (DATE(s.data_inicio) <= ? AND DATE(s.data_inicio, '+' || (s.dias - 1) || ' days') >= ?)
+        )
+    """, conn, params=(colaborador_id, str(data_fim), str(data_inicio)))
+    conn.close()
+
+    if df_conflitos.empty:
+        return False, []
+
+    # Filtrar apenas pessoas do mesmo cargo
+    colegas_conflito = []
+    for _, row in df_conflitos.iterrows():
+        nome_colega = row["nome"]
+        cargo_colega = EQUIPE.get(nome_colega)
+        
+        if cargo_colega == cargo:
+            colegas_conflito.append({
+                "nome": nome_colega,
+                "data_inicio": row["data_inicio"],
+                "dias": row["dias"],
+                "status": row["status"]
+            })
+
+    if colegas_conflito:
+        return True, colegas_conflito
+
+    return False, []
+
+
 def gerar_calendario_mes(ano, mes):
     """Gera dados do calendário para um mês específico."""
     from calendar import monthrange
@@ -588,6 +651,37 @@ if token:
             if not valido:
                 st.error(f"❌ {msg}")
             else:
+                # Verificar alerta de conflito (não bloqueante)
+                tem_alerta, colegas_conflito = verificar_alerta_conflito(colaborador_id, data_inicio, dias)
+
+                if tem_alerta:
+                    st.warning("⚠️ Alerta de Conflito de Equipe")
+                    st.write("Já existem funcionários da mesma função programados neste período:")
+                    
+                    # Listar colegas em conflito
+                    for colega in colegas_conflito:
+                        data_fim = datetime.strptime(colega["data_inicio"], "%Y-%m-%d").date() + timedelta(days=colega["dias"] - 1)
+                        status_emoji = {
+                            "APROVADO": "✅",
+                            "EM_ANDAMENTO": "🔄"
+                        }.get(colega["status"], "❓")
+                        
+                        st.write(
+                            f"{status_emoji} **{colega['nome']}** - "
+                            f"{colega['data_inicio']} até {data_fim.strftime('%d/%m/%Y')} "
+                            f"({colega['dias']} dias)"
+                        )
+
+                    # Checkbox para confirmar
+                    confirmar = st.checkbox(
+                        "✅ Entendo o conflito e desejo continuar com a solicitação",
+                        key="confirmar_conflito"
+                    )
+
+                    if not confirmar:
+                        st.info("💡 Você pode usar a aba 'Calendário' para encontrar datas com menor conflito.")
+                        st.stop()
+
                 # Salvar solicitação
                 conn = get_conn()
                 c = conn.cursor()
