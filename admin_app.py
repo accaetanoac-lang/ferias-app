@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, date
 
 from ferias import EQUIPE, LIMITES_EQUIPE
 
+# deploy refresh - force Streamlit Cloud update
 st.set_page_config(page_title="Gestão de Férias", layout="wide")
 
 # ------------------------
