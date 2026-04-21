@@ -1,0 +1,28 @@
+.venv/
+__pycache__/
+*.pyc
+
+# Segurança
+credentials.json
+token.json
+.env
+.streamlit/secrets.toml
+
+# Banco
+ferias.db
+
+# Backups
+backup_*.db
+backup_*.json
+
+# Sistema
+*.log
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Exports e cópias dentro de backup/ (PASSO 2–3)
+backup/*.db
+backup/*.json
