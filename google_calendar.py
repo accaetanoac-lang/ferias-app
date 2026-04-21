@@ -145,7 +145,11 @@ def criar_evento(
     else:
         color_id = "2"
 
-    service = get_service()
+    try:
+        service = get_service()
+    except GoogleCalendarAuthError:
+        return ""
+
     body = {
         "summary": f"Férias - {nome} ({quantidade_dias} dias)",
         "description": description,

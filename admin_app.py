@@ -1,7 +1,17 @@
 import io
 import os
+import socket
+import time
 from datetime import date, timedelta
 from typing import List, Optional, Tuple
+
+
+def _app_port() -> int:
+    """Porta do processo (Streamlit Cloud define PORT; local padrão 8501)."""
+    try:
+        return int(os.environ.get("PORT", "8501"))
+    except ValueError:
+        return 8501
 
 import pandas as pd
 import plotly.express as px
@@ -17,6 +27,7 @@ from repository import (
     colaborador_row_para_dict,
     criar_colaborador,
     listar_colaboradores,
+    listar_colaboradores_sem_programacao,
     listar_solicitacoes_com_status,
     salvar_solicitacao,
     seed_colaboradores_if_needed,
@@ -25,7 +36,46 @@ import ferias
 from escala import aplicar_flags_escala, obter_flags_nova_solicitacao_escala
 from google_calendar import criar_evento, periodo_valido
 
-st.set_page_config(page_title="Gestão de Férias", layout="wide")
+
+def get_local_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+    finally:
+        s.close()
+    return ip
+
+
+def _qp_first(key: str, default: str = "") -> str:
+    query_params = st.query_params
+    if key not in query_params:
+        return default
+    v = query_params[key]
+    if isinstance(v, (list, tuple)):
+        return str(v[0]) if v else default
+    return str(v) if v is not None else default
+
+
+ip = get_local_ip()
+query_params = st.query_params
+modo = _qp_first("modo", "admin")
+MODO_IS_FORM = str(modo).lower() == "form"
+
+st.set_page_config(
+    page_title=(
+        "Solicitação de Férias" if MODO_IS_FORM else "Gestão de Férias"
+    ),
+    layout="centered" if MODO_IS_FORM else "wide",
+)
+
+if not MODO_IS_FORM:
+    _p = _app_port()
+    st.info(f"Acesse no celular (rede local): http://{ip}:{_p}/")
+    st.warning(
+        "Se não abrir no celular, libere a porta do app no firewall (rede local) "
+        "ou use a URL pública do deploy no Streamlit Cloud."
+    )
 
 _MESES_PT = {
     1: "Janeiro",
@@ -58,18 +108,6 @@ def gerar_insights(df: pd.DataFrame) -> dict:
         pico = None
     return {"risco": risco, "pico_mes": pico}
 
-
-init_db()
-
-try:
-    seed_colaboradores_if_needed()
-except FileNotFoundError as e:
-    st.error(str(e))
-    st.stop()
-
-st.info(f"Banco em uso: {DB_PATH}")
-
-st.sidebar.caption("Colaboradores: data/colaboradores.json (sem Excel em runtime)")
 
 # =========================
 # SENHA ADMIN
@@ -130,6 +168,21 @@ def validar_token(token):
     conn.close()
 
     return row[0] if row else None
+
+
+def buscar_colaborador_por_token(token: str):
+    cid = validar_token(token)
+    if not cid:
+        return None
+    row = buscar_colaborador(cid)
+    return colaborador_row_para_dict(row)
+
+
+def gerar_link_form(
+    token: str, ip: str, porta: Optional[int] = None
+) -> str:
+    p = _app_port() if porta is None else porta
+    return f"http://{ip}:{p}/?modo=form&token={token}"
 
 
 # =========================
@@ -198,6 +251,215 @@ def _data_fim_e_retorno(data_inicio: date, dias: int) -> Tuple[date, date]:
     data_fim = data_inicio + timedelta(days=dias - 1)
     data_retorno = data_fim + timedelta(days=1)
     return data_fim, data_retorno
+
+
+def _montar_periodos_por_tipo(
+    inicio1: date,
+    inicio2: Optional[date],
+    tipo_label: str,
+) -> Tuple[Optional[str], List[Tuple[date, date]]]:
+    """Retorna (codigo, periodos) ou (None, []) se inválido."""
+    tipos_map = {
+        "30 dias corridos": "30",
+        "15 + 15 dias": "15+15",
+        "20 + 10 dias": "20+10",
+    }
+    code = tipos_map.get(tipo_label)
+    if not code:
+        return None, []
+    if code == "30":
+        p1f, _ = _data_fim_e_retorno(inicio1, 30)
+        return code, [(inicio1, p1f)]
+    if inicio2 is None:
+        return code, []
+    if code == "15+15":
+        p1f, _ = _data_fim_e_retorno(inicio1, 15)
+        p2f, _ = _data_fim_e_retorno(inicio2, 15)
+        return code, [(inicio1, p1f), (inicio2, p2f)]
+    p1f, _ = _data_fim_e_retorno(inicio1, 20)
+    p2f, _ = _data_fim_e_retorno(inicio2, 10)
+    return code, [(inicio1, p1f), (inicio2, p2f)]
+
+
+def validar_regras(
+    inicio1: date,
+    inicio2: Optional[date],
+    tipo: str,
+    colab: dict,
+) -> Optional[str]:
+    code, periodos = _montar_periodos_por_tipo(inicio1, inicio2, tipo)
+    if not code:
+        return "Tipo de férias inválido"
+    if not periodos:
+        return "Preencha a data do segundo período"
+    return ferias.validar_solicitacao_ferias_fracionadas(colab, code, periodos)
+
+
+def calcular_retorno(
+    inicio1: date,
+    inicio2: Optional[date],
+    tipo: str,
+) -> str:
+    code, periodos = _montar_periodos_por_tipo(inicio1, inicio2, tipo)
+    if not code or not periodos:
+        return "—"
+    if code == "30":
+        _, r = _data_fim_e_retorno(periodos[0][0], 30)
+        return f"{r:%d/%m/%Y}"
+    if code == "15+15":
+        _, r1 = _data_fim_e_retorno(periodos[0][0], 15)
+        _, r2 = _data_fim_e_retorno(periodos[1][0], 15)
+        return f"1º: {r1:%d/%m/%Y} | 2º: {r2:%d/%m/%Y}"
+    _, r1 = _data_fim_e_retorno(periodos[0][0], 20)
+    _, r2 = _data_fim_e_retorno(periodos[1][0], 10)
+    return f"1º: {r1:%d/%m/%Y} | 2º: {r2:%d/%m/%Y}"
+
+
+def _enviar_ferias_modo_form(
+    colab_id: int,
+    colab: dict,
+    tipo_codigo: str,
+    periodos: List[Tuple[date, date]],
+) -> None:
+    """Mesmo fluxo de envio do render_formulario (validação, escala, DB, calendário)."""
+    flag_excesso, flag_conflito = obter_flags_nova_solicitacao_escala(
+        colab, periodos
+    )
+    if flag_excesso:
+        st.error("Limite de colaboradores por função excedido")
+        st.stop()
+    if flag_conflito:
+        st.warning("Conflito de período detectado")
+
+    if not _inserir_solicitacao_ferias(colab_id, colab, periodos):
+        st.stop()
+        return
+
+    periodos_dicts = [
+        {"inicio": str(di), "fim": str(df)} for di, df in periodos
+    ]
+    salvar_solicitacao(colab_id, tipo_codigo, periodos_dicts)
+
+    nome_colaborador = colab["nome"]
+    for p in periodos_dicts:
+        if not periodo_valido(p["inicio"], p["fim"]):
+            st.warning("Erro ao enviar para o Google Calendar")
+            continue
+        try:
+            criar_evento(
+                nome_colaborador,
+                p["inicio"],
+                p["fim"],
+                conflito=flag_conflito,
+                excesso_funcao=flag_excesso,
+            )
+        except Exception:
+            st.warning("Erro ao enviar para o Google Calendar")
+
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+
+    st.success("Solicitação enviada com sucesso!")
+    time.sleep(1)
+    st.rerun()
+
+
+def render_modo_form() -> None:
+    """Tela enxuta para ?modo=form&token=…"""
+    st.markdown(
+        """
+    <style>
+    .block-container {
+        max-width: 500px;
+        margin: auto;
+    }
+    h1, h2, h3 {
+        text-align: center;
+    }
+    .stButton>button {
+        width: 100%;
+        height: 50px;
+        font-size: 16px;
+        border-radius: 10px;
+    }
+    </style>
+    """,
+        unsafe_allow_html=True,
+    )
+
+    token = _qp_first("token", "")
+    if not token:
+        st.error("Acesso inválido")
+        st.stop()
+
+    colab = buscar_colaborador_por_token(token)
+    if not colab:
+        st.error("Token inválido")
+        st.stop()
+
+    colab_id = int(colab["id"])
+
+    st.markdown("## 📅 Solicitação de Férias")
+    st.markdown(f"### 👤 {colab['nome']}")
+    st.caption(f"Função: {colab.get('funcao', '')} · Dias: {colab.get('dias_disponiveis', 30)}")
+
+    tipo = st.radio(
+        "Como deseja dividir suas férias?",
+        [
+            "30 dias corridos",
+            "15 + 15 dias",
+            "20 + 10 dias",
+        ],
+        key="form_modo_tipo",
+    )
+
+    inicio1 = st.date_input("📆 Data de início", key="form_inicio1")
+
+    inicio2: Optional[date] = None
+    if tipo != "30 dias corridos":
+        inicio2 = st.date_input("📆 Segundo período", value=None, key="form_inicio2")
+
+    erro = validar_regras(inicio1, inicio2, tipo, colab)
+    if erro:
+        st.error(erro)
+    else:
+        rtxt = calcular_retorno(inicio1, inicio2, tipo)
+        st.info(f"Retorno previsto: {rtxt}")
+
+    if st.button("✅ Enviar solicitação", key="form_enviar"):
+        e2 = validar_regras(inicio1, inicio2, tipo, colab)
+        if e2:
+            st.error(e2)
+            st.stop()
+        code, periodos = _montar_periodos_por_tipo(inicio1, inicio2, tipo)
+        if not code or not periodos:
+            st.error("Preencha as datas corretamente")
+            st.stop()
+        _enviar_ferias_modo_form(colab_id, colab, code, periodos)
+
+
+init_db()
+
+try:
+    seed_colaboradores_if_needed()
+except FileNotFoundError as e:
+    st.error(str(e))
+    st.stop()
+
+if "_app_boot_logged" not in st.session_state:
+    st.session_state["_app_boot_logged"] = True
+    print("App iniciado")
+    print("Banco:", DB_PATH)
+
+if MODO_IS_FORM:
+    render_modo_form()
+    st.stop()
+
+st.info(f"Banco em uso: {DB_PATH}")
+
+st.sidebar.caption("Colaboradores: data/colaboradores.json (sem Excel em runtime)")
 
 
 def render_formulario(colab_id):
@@ -365,13 +627,12 @@ try:
     if not admin_tem_senha():
         definir_senha_admin("123456")
 
-    params = st.query_params
-    token = params.get("token")
+    token = _qp_first("token", "")
 
     # =========================
-    # FUNCIONÁRIO
+    # FUNCIONÁRIO (link legado ?token=… sem modo=form)
     # =========================
-    if token:
+    if token and not MODO_IS_FORM:
         colab_id = validar_token(token)
 
         if not colab_id:
@@ -472,8 +733,9 @@ try:
 
             if st.button("Gerar", key="admin_btn_gerar_token"):
                 t = gerar_token(colab_id)
-                link = f"http://localhost:8501/?token={t}"
+                link = gerar_link_form(t, ip)
                 st.code(link)
+                st.caption("Link com tela de formulário (recomendado: rede local).")
         else:
             st.warning("Cadastre colaboradores primeiro")
 
@@ -500,12 +762,29 @@ try:
         st.markdown("---")
 
         dados = listar_solicitacoes_com_status()
+        sem_programacao = listar_colaboradores_sem_programacao()
+        total_sem = len(sem_programacao)
 
         if not dados:
             st.warning("Nenhuma solicitação registrada")
-            st.stop()
-
-        df = pd.DataFrame(dados)
+            df = pd.DataFrame(
+                columns=[
+                    "id",
+                    "nome",
+                    "funcao",
+                    "tipo",
+                    "data_inicio_1",
+                    "data_fim_1",
+                    "data_inicio_2",
+                    "data_fim_2",
+                    "status",
+                    "aprovado_por",
+                    "data_aprovacao",
+                    "criado_em",
+                ]
+            )
+        else:
+            df = pd.DataFrame(dados)
 
         df.columns = [str(c).strip().lower() for c in df.columns]
 
@@ -580,12 +859,18 @@ try:
             )
         em_andamento = df_filt[em_p1 | em_p2]
 
-        col_k1, col_k2, col_k3, col_k4 = st.columns(4)
+        col_k1, col_k2, col_k3, col_k4, col_k5 = st.columns(5)
 
         col_k1.metric("Total solicitações", total)
         col_k2.metric("Colaboradores", colaboradores)
         col_k3.metric("Em férias hoje", len(em_andamento))
         col_k4.metric("Conflitos críticos", len(df_alerta))
+        col_k5.metric("Pendentes de programação", total_sem)
+
+        if total_sem > 0:
+            st.warning(
+                f"{total_sem} colaboradores ainda não programaram férias"
+            )
 
         st.markdown("---")
 
@@ -764,6 +1049,16 @@ try:
         )
 
         st.dataframe(styled, use_container_width=True)
+
+        st.markdown("---")
+        st.markdown("## ⚠️ Colaboradores sem programação de férias")
+        if not sem_programacao:
+            st.success("Todos os colaboradores já realizaram sua programação ✔")
+        else:
+            lista_sem = [
+                {"ID": c[0], "Nome": c[1]} for c in sem_programacao
+            ]
+            st.dataframe(lista_sem, use_container_width=True)
 
         pendentes = df[df["status"] == "PENDENTE"]
         if perfil == "RH" and len(pendentes) > 0:
