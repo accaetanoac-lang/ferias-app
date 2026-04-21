@@ -1,5 +1,9 @@
-import io
+import sys
 import os
+
+sys.path.append(os.path.dirname(__file__))
+
+import io
 import socket
 import time
 from datetime import date, timedelta
