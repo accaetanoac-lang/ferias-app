@@ -4,9 +4,13 @@ import os
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(BASE_DIR)
 
+import database
+import repository
+
 import io
 import socket
 import time
+import traceback
 from datetime import date, timedelta
 from typing import List, Optional, Tuple
 
@@ -1094,5 +1098,5 @@ try:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
-except Exception as e:
-    st.error(f"Erro geral: {e}")
+except Exception:
+    st.error(traceback.format_exc())

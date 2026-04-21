@@ -178,6 +178,7 @@ def atualizar_status_solicitacao(solicitacao_id, status, aprovado_por):
 
 
 def listar_solicitacoes_com_status():
+    """Consulta direta ao SQLite (sem @st.cache_data); sempre dados atuais."""
     conn = get_conn()
     c = conn.cursor()
 
@@ -211,3 +212,23 @@ def listar_solicitacoes_com_status():
 
 def listar_solicitacoes():
     return listar_solicitacoes_com_status()
+
+
+def listar_colaboradores_sem_programacao():
+    """LEFT JOIN sem cache; após INSERT em solicitacoes, o colaborador some da lista."""
+    conn = get_conn()
+    c = conn.cursor()
+
+    c.execute(
+        """
+        SELECT c.id, c.nome
+        FROM colaboradores c
+        LEFT JOIN solicitacoes s ON c.id = s.colaborador_id
+        WHERE s.id IS NULL
+        ORDER BY c.nome
+        """
+    )
+
+    data = c.fetchall()
+    conn.close()
+    return data

@@ -13,20 +13,18 @@ br_holidays = holidays.Brazil()
 MSG_SAFRA = "Período de safra, proibido férias"
 
 
-def is_periodo_safra(data: date) -> bool:
-    ano = data.year
+def periodo_proibido_intervalo(inicio: date, fim: date) -> bool:
+    """True se [inicio, fim] intercepta algum intervalo de safra do ano de *inicio*."""
+    ano = inicio.year
 
-    inicio_1 = date(ano, 4, 1)
-    fim_1 = date(ano, 5, 30)
+    periodos = [
+        (date(ano, 4, 15), date(ano, 5, 30)),
+        (date(ano, 7, 15), date(ano, 8, 30)),
+    ]
 
-    inicio_2 = date(ano, 7, 1)
-    fim_2 = date(ano, 8, 30)
-
-    if inicio_1 <= data <= fim_1:
-        return True
-
-    if inicio_2 <= data <= fim_2:
-        return True
+    for p_inicio, p_fim in periodos:
+        if inicio <= p_fim and fim >= p_inicio:
+            return True
 
     return False
 
@@ -36,9 +34,6 @@ def is_feriado(data: date) -> bool:
 
 
 def validar_data_inicio(data: date) -> Optional[str]:
-    if is_periodo_safra(data):
-        return MSG_SAFRA
-
     if data.weekday() == 4:
         return "Não é permitido iniciar férias na sexta-feira"
 
@@ -102,6 +97,9 @@ def validar_ferias_sem_saldo(
 
     if dias not in [10, 15, 20, 30]:
         return "Permitido apenas: 30, 20+10 ou 15+15"
+
+    if periodo_proibido_intervalo(data_inicio, data_fim):
+        return MSG_SAFRA
 
     err_inicio = validar_data_inicio(data_inicio)
     if err_inicio:
