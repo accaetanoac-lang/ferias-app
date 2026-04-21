@@ -4,13 +4,19 @@ import os
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(BASE_DIR)
 
-import database
-import repository
+import traceback
+import streamlit as st
+
+try:
+    import database
+    import repository
+except Exception:
+    st.error(traceback.format_exc())
+    st.stop()
 
 import io
 import socket
 import time
-import traceback
 from datetime import date, timedelta
 from typing import List, Optional, Tuple
 
@@ -24,23 +30,34 @@ def _app_port() -> int:
 
 import pandas as pd
 import plotly.express as px
-import streamlit as st
 from streamlit_calendar import calendar
 import uuid
 import bcrypt
 
-from database import DB_PATH, get_conn, init_db
-from repository import (
-    atualizar_status_solicitacao,
-    buscar_colaborador,
-    colaborador_row_para_dict,
-    criar_colaborador,
-    listar_colaboradores,
-    listar_colaboradores_sem_programacao,
-    listar_solicitacoes_com_status,
-    salvar_solicitacao,
-    seed_colaboradores_if_needed,
-)
+# from database import DB_PATH, get_conn, init_db
+# from repository import (
+#     atualizar_status_solicitacao,
+#     buscar_colaborador,
+#     colaborador_row_para_dict,
+#     criar_colaborador,
+#     listar_colaboradores,
+#     listar_colaboradores_sem_programacao,
+#     listar_solicitacoes_com_status,
+#     salvar_solicitacao,
+#     seed_colaboradores_if_needed,
+# )
+DB_PATH = database.DB_PATH
+get_conn = database.get_conn
+init_db = database.init_db
+atualizar_status_solicitacao = repository.atualizar_status_solicitacao
+buscar_colaborador = repository.buscar_colaborador
+colaborador_row_para_dict = repository.colaborador_row_para_dict
+criar_colaborador = repository.criar_colaborador
+listar_colaboradores = repository.listar_colaboradores
+listar_colaboradores_sem_programacao = repository.listar_colaboradores_sem_programacao
+listar_solicitacoes_com_status = repository.listar_solicitacoes_com_status
+salvar_solicitacao = repository.salvar_solicitacao
+seed_colaboradores_if_needed = repository.seed_colaboradores_if_needed
 import ferias
 from escala import aplicar_flags_escala, obter_flags_nova_solicitacao_escala
 from google_calendar import criar_evento, periodo_valido
