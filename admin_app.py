@@ -213,6 +213,14 @@ def buscar_colaborador_por_token(token: str):
 def gerar_link_form(
     token: str, ip: str = None, porta: Optional[int] = None
 ) -> str:
+    # Se houver PUBLIC_URL configurada nos secrets (Streamlit Cloud), usa ela
+    try:
+        public_url = st.secrets.get("PUBLIC_URL", "").strip().rstrip("/")
+        if public_url:
+            return f"{public_url}/?modo=form&token={token}"
+    except Exception:
+        pass
+    # Fallback: IP local (rede interna)
     if ip is None:
         ip = get_local_ip()
     p = _app_port() if porta is None else porta
