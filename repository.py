@@ -6,7 +6,21 @@ import os
 import database
 import supabase_client
 
-USE_SUPABASE = os.getenv("USE_SUPABASE", "false") == "true"
+def _use_supabase() -> bool:
+    val = os.getenv("USE_SUPABASE", "").lower()
+    if val in ("true", "1", "yes"):
+        return True
+    if val in ("false", "0", "no"):
+        return False
+    # Fallback: tenta ler dos secrets do Streamlit
+    try:
+        import streamlit as st
+        v = str(st.secrets.get("USE_SUPABASE", "false")).lower()
+        return v in ("true", "1", "yes")
+    except Exception:
+        return False
+
+USE_SUPABASE = _use_supabase()
 
 
 def get_colaboradores():

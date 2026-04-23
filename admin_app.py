@@ -145,7 +145,14 @@ def gerar_insights(df: pd.DataFrame) -> dict:
 # SENHA ADMIN
 # =========================
 
+import supabase_client as _supa
+_USE_SUPA = os.getenv("USE_SUPABASE", "false").lower() == "true"
+
+
 def admin_tem_senha():
+    if _USE_SUPA:
+        rows = _supa.select("admin_senha")
+        return bool(rows and (rows[0].get("senha_hash") or rows[0].get("hash")))
     conn = get_conn()
     row = conn.execute("SELECT senha_hash FROM admin_senha LIMIT 1").fetchone()
     conn.close()
@@ -153,9 +160,12 @@ def admin_tem_senha():
 
 
 def definir_senha_admin(senha: str):
-    conn = get_conn()
     senha_hash = bcrypt.hashpw(senha.encode(), bcrypt.gensalt()).decode()
-
+    if _USE_SUPA:
+        _supa.delete("admin_senha", "&id=neq.0")
+        _supa.insert("admin_senha", {"senha_hash": senha_hash})
+        return
+    conn = get_conn()
     conn.execute("DELETE FROM admin_senha")
     conn.execute("INSERT INTO admin_senha (senha_hash) VALUES (?)", (senha_hash,))
     conn.commit()
@@ -163,13 +173,19 @@ def definir_senha_admin(senha: str):
 
 
 def verificar_senha_admin(senha: str):
+    if _USE_SUPA:
+        rows = _supa.select("admin_senha")
+        if not rows:
+            return False
+        stored = rows[0].get("senha_hash") or rows[0].get("hash", "")
+        if not stored:
+            return False
+        return bcrypt.checkpw(senha.encode(), stored.encode())
     conn = get_conn()
     row = conn.execute("SELECT senha_hash FROM admin_senha LIMIT 1").fetchone()
     conn.close()
-
     if not row:
         return False
-
     return bcrypt.checkpw(senha.encode(), row[0].encode())
 
 
@@ -179,7 +195,14 @@ def verificar_senha_admin(senha: str):
 
 def gerar_token(colab_id):
     token = str(uuid.uuid4())
-
+    if _USE_SUPA:
+        _supa.insert("tokens", {
+            "colaborador_id": colab_id,
+            "token": token,
+            "revogado": 0,
+            "usos": 0,
+        })
+        return token
     conn = get_conn()
     conn.execute(
         "INSERT INTO tokens (colaborador_id, token) VALUES (?,?)",
@@ -187,18 +210,21 @@ def gerar_token(colab_id):
     )
     conn.commit()
     conn.close()
-
     return token
 
 
 def validar_token(token):
+    if _USE_SUPA:
+        rows = _supa.select("tokens", f"&token=eq.{token}")
+        if rows and not rows[0].get("revogado"):
+            return rows[0].get("colaborador_id")
+        return None
     conn = get_conn()
     row = conn.execute(
         "SELECT colaborador_id FROM tokens WHERE token=?",
         (token,),
     ).fetchone()
     conn.close()
-
     return row[0] if row else None
 
 
