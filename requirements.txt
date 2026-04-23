@@ -11,3 +11,4 @@ bcrypt==4.1.2
 holidays
 openpyxl
 pillow
+supabase
