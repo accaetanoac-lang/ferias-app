@@ -213,14 +213,28 @@ def buscar_colaborador_por_token(token: str):
 def gerar_link_form(
     token: str, ip: str = None, porta: Optional[int] = None
 ) -> str:
-    # Se houver PUBLIC_URL configurada nos secrets (Streamlit Cloud), usa ela
+    # 1. Verifica se há PUBLIC_URL nos secrets (configuração manual)
     try:
         public_url = st.secrets.get("PUBLIC_URL", "").strip().rstrip("/")
         if public_url:
             return f"{public_url}/?modo=form&token={token}"
     except Exception:
         pass
-    # Fallback: IP local (rede interna)
+    # 2. Detecta automaticamente se está rodando no Streamlit Cloud
+    # O Streamlit Cloud define a variável de ambiente HOSTNAME com o domínio
+    hostname = os.environ.get("HOSTNAME", "")
+    streamlit_server = os.environ.get("STREAMLIT_SERVER_ADDRESS", "")
+    # No Streamlit Cloud, o path do app é /mount/src/<repo>
+    is_cloud = (
+        os.path.exists("/mount/src")
+        or "streamlit.app" in hostname
+        or os.environ.get("IS_STREAMLIT_CLOUD", "") == "true"
+    )
+    if is_cloud:
+        # Usa a URL canônica do app no Streamlit Cloud
+        cloud_url = "https://ferias-green.streamlit.app"
+        return f"{cloud_url}/?modo=form&token={token}"
+    # 3. Fallback: IP local (rede interna)
     if ip is None:
         ip = get_local_ip()
     p = _app_port() if porta is None else porta
