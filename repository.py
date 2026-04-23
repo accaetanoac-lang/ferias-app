@@ -15,10 +15,15 @@ def _use_supabase() -> bool:
     # Fallback: tenta ler dos secrets do Streamlit
     try:
         import streamlit as st
-        v = str(st.secrets.get("USE_SUPABASE", "false")).lower()
-        return v in ("true", "1", "yes")
+        v = str(st.secrets.get("USE_SUPABASE", "")).lower()
+        if v in ("true", "1", "yes"):
+            return True
+        if v in ("false", "0", "no"):
+            return False
     except Exception:
-        return False
+        pass
+    # Padrão: usa Supabase sempre que o cliente conseguir conectar
+    return supabase_client._client() is not None
 
 USE_SUPABASE = _use_supabase()
 

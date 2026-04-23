@@ -19,14 +19,67 @@ except Exception:
     _secrets = {}
 
 
+# Valores padrão não-secretos
+_DEFAULT_URL = "https://sutecqkxvpufcptwsbac.supabase.co"
+_DEFAULT_PUBLIC_URL = "https://ferias-green.streamlit.app"
+
+
+def _load_local_config() -> dict:
+    """Carrega credenciais do arquivo .streamlit/secrets.toml ou .env local."""
+    cfg = {}
+    # Tenta ler .streamlit/secrets.toml
+    base = os.path.dirname(os.path.abspath(__file__))
+    toml_path = os.path.join(base, ".streamlit", "secrets.toml")
+    if os.path.exists(toml_path):
+        try:
+            import re
+            with open(toml_path) as f:
+                for line in f:
+                    m = re.match(r'^([A-Z_]+)\s*=\s*"(.+)"', line.strip())
+                    if m:
+                        cfg[m.group(1)] = m.group(2)
+        except Exception:
+            pass
+    # Tenta ler .env
+    env_path = os.path.join(base, ".env")
+    if os.path.exists(env_path):
+        try:
+            import re
+            with open(env_path) as f:
+                for line in f:
+                    m = re.match(r'^([A-Z_]+)\s*=\s*(.+)', line.strip())
+                    if m:
+                        cfg[m.group(1)] = m.group(2).strip('"\'')
+        except Exception:
+            pass
+    return cfg
+
+
+_local_cfg = _load_local_config()
+
+
 def _get(key: str, default: str = "") -> str:
+    # 1. Variável de ambiente
     val = os.getenv(key, "")
     if val:
         return val
+    # 2. Streamlit secrets
     try:
-        return _secrets.get(key, default)
+        v = _secrets.get(key, "")
+        if v:
+            return str(v)
     except Exception:
-        return default
+        pass
+    # 3. Arquivo local (.streamlit/secrets.toml ou .env)
+    if key in _local_cfg:
+        return _local_cfg[key]
+    # 4. Defaults não-secretos
+    _defaults = {
+        "SUPABASE_URL": _DEFAULT_URL,
+        "PUBLIC_URL": _DEFAULT_PUBLIC_URL,
+        "USE_SUPABASE": "true",
+    }
+    return _defaults.get(key, default)
 
 
 def _client():

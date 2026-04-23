@@ -146,7 +146,7 @@ def gerar_insights(df: pd.DataFrame) -> dict:
 # =========================
 
 import supabase_client as _supa
-_USE_SUPA = os.getenv("USE_SUPABASE", "false").lower() == "true"
+_USE_SUPA = _supa._get("USE_SUPABASE", "true").lower() in ("true", "1", "yes")
 
 
 def admin_tem_senha():
