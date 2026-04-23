@@ -481,11 +481,20 @@ def render_modo_form() -> None:
         key="form_modo_tipo",
     )
 
-    inicio1 = st.date_input("📆 Data de início", key="form_inicio1")
-
     inicio2: Optional[date] = None
-    if tipo != "30 dias corridos":
-        inicio2 = st.date_input("📆 Segundo período", value=None, key="form_inicio2")
+
+    if tipo == "30 dias corridos":
+        inicio1 = st.date_input("📆 Data de início", key="form_inicio1")
+    elif tipo == "15 + 15 dias":
+        st.markdown("**1º Período — 15 dias**")
+        inicio1 = st.date_input("📆 Início do 1º período", key="form_inicio1")
+        st.markdown("**2º Período — 15 dias**")
+        inicio2 = st.date_input("📆 Início do 2º período", value=None, key="form_inicio2")
+    else:  # 20 + 10 dias
+        st.markdown("**1º Período — 20 dias**")
+        inicio1 = st.date_input("📆 Início do 1º período", key="form_inicio1")
+        st.markdown("**2º Período — 10 dias**")
+        inicio2 = st.date_input("📆 Início do 2º período", value=None, key="form_inicio2")
 
     erro = validar_regras(inicio1, inicio2, tipo, colab)
     if erro:
