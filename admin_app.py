@@ -10,7 +10,13 @@ import streamlit as st
 try:
     import database
     import repository
-except Exception:
+except Exception as _err:
+    try:
+        from streamlit.runtime.scriptrunner.exceptions import RerunException, StopException
+        if isinstance(_err, (RerunException, StopException)):
+            raise
+    except ImportError:
+        pass
     st.error(traceback.format_exc())
     st.stop()
 
@@ -205,10 +211,22 @@ def buscar_colaborador_por_token(token: str):
 
 
 def gerar_link_form(
-    token: str, ip: str, porta: Optional[int] = None
+    token: str, ip: str = None, porta: Optional[int] = None
 ) -> str:
+    if ip is None:
+        ip = get_local_ip()
     p = _app_port() if porta is None else porta
     return f"http://{ip}:{p}/?modo=form&token={token}"
+
+
+def gerar_qrcode(url: str):
+    import io as _io
+    import qrcode as _qrcode
+    qr = _qrcode.make(url)
+    buf = _io.BytesIO()
+    qr.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
 
 
 # =========================
@@ -762,6 +780,18 @@ try:
                 link = gerar_link_form(t, ip)
                 st.code(link)
                 st.caption("Link com tela de formulário (recomendado: rede local).")
+                try:
+                    qr_buf = gerar_qrcode(link)
+                    st.image(qr_buf, caption="Escaneie com o celular", width=220)
+                    st.download_button(
+                        label="⬇ Baixar QR Code",
+                        data=qr_buf,
+                        file_name=f"qrcode_{nome_sel.replace(' ', '_')}.png",
+                        mime="image/png",
+                        key="dl_qr",
+                    )
+                except Exception as _qr_err:
+                    st.warning(f"QR Code não gerado: {_qr_err}")
         else:
             st.warning("Cadastre colaboradores primeiro")
 
@@ -1115,5 +1145,11 @@ try:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
-except Exception:
+except Exception as _err:
+    try:
+        from streamlit.runtime.scriptrunner.exceptions import RerunException, StopException
+        if isinstance(_err, (RerunException, StopException)):
+            raise
+    except ImportError:
+        pass
     st.error(traceback.format_exc())

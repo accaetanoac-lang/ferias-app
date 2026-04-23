@@ -1,157 +1,149 @@
 [
   {
     "nome": "Adeilson de Oliveira",
-    "funcao": "",
-    "dias": 30
-  },
-  {
-    "nome": "Adeilson de Oliveira",
-    "funcao": "",
-    "dias": 30
-  },
-  {
-    "nome": "Anderson Lucas Duarte Freitas",
-    "funcao": "",
-    "dias": 30
-  },
-  {
-    "nome": "Antonio Carlos Caetano",
-    "funcao": "",
+    "funcao": "Consultor Técnico",
+    "email": "adeilson.deoliveira@greenmaquinas.com.br",
+    "telefone": "95 98117-0016",
     "dias": 30
   },
   {
     "nome": "Antônio Weslley Santos Batista",
-    "funcao": "",
-    "dias": 30
-  },
-  {
-    "nome": "Bruno Caik da Silva Thome",
-    "funcao": "",
-    "dias": 30
-  },
-  {
-    "nome": "Clenison de Sousa Soares",
-    "funcao": "",
+    "funcao": "Consultor Técnico",
+    "email": "antonio.weslley@greenmaquinas.com.br",
+    "telefone": "95 98102-0047",
     "dias": 30
   },
   {
     "nome": "Clenison de Sousa Soares",
-    "funcao": "",
+    "funcao": "Consultor Técnico",
+    "email": "clenison.desousa@greenmaquinas.com.br",
+    "telefone": "95 99156-4103",
     "dias": 30
   },
   {
     "nome": "Daniel Mateus Oliveira",
-    "funcao": "",
-    "dias": 30
-  },
-  {
-    "nome": "Daniel Mateus Oliveira",
-    "funcao": "",
-    "dias": 30
-  },
-  {
-    "nome": "Dhone Francisco da Silva",
-    "funcao": "",
+    "funcao": "Consultor Técnico",
+    "email": "daniel.oliveira@greenmaquinas.com.br",
+    "telefone": "95 99135-7492",
     "dias": 30
   },
   {
     "nome": "Edilson Ribeiro de Lima Junior",
-    "funcao": "",
-    "dias": 30
-  },
-  {
-    "nome": "Filipe Honorato de Souza",
-    "funcao": "",
-    "dias": 30
-  },
-  {
-    "nome": "Filipe Honorato de Souza",
-    "funcao": "",
-    "dias": 30
-  },
-  {
-    "nome": "Gabriel Sousa Vieira",
-    "funcao": "",
+    "funcao": "Consultor Técnico",
+    "email": "edilson.ribeiro@greenmaquinas.com.br",
+    "telefone": "95 98102-0021",
     "dias": 30
   },
   {
     "nome": "Geoglenn Jose Lanz Parra",
-    "funcao": "",
+    "funcao": "Consultor Técnico",
+    "email": "geoglen.parra@greenmaquinas.com.br",
+    "telefone": "95 98105-0360",
     "dias": 30
   },
   {
     "nome": "Igor Matthews Barros Marques",
-    "funcao": "",
-    "dias": 30
-  },
-  {
-    "nome": "Igor Matthews Barros Marques",
-    "funcao": "",
-    "dias": 30
-  },
-  {
-    "nome": "Jaime da Silva Coelho",
-    "funcao": "",
-    "dias": 30
-  },
-  {
-    "nome": "Jorge William Braga Menezes",
-    "funcao": "",
-    "dias": 30
-  },
-  {
-    "nome": "José Augusto Barbosa Neto",
-    "funcao": "",
-    "dias": 30
-  },
-  {
-    "nome": "Kaio Gabriel Carrera de Oliveira",
-    "funcao": "",
-    "dias": 30
-  },
-  {
-    "nome": "Leonardo Winícios Simões dos Santos",
-    "funcao": "",
+    "funcao": "Consultor Técnico",
+    "email": "igor.barros@greenmaquinas.com.br",
+    "telefone": "95 98116-0070",
     "dias": 30
   },
   {
     "nome": "Lucas Gleub Ribeiro",
-    "funcao": "",
-    "dias": 30
-  },
-  {
-    "nome": "Marinilson Mota de Lira",
-    "funcao": "",
-    "dias": 30
-  },
-  {
-    "nome": "Marinilson Mota de Lira",
-    "funcao": "",
+    "funcao": "Consultor Técnico",
+    "email": "lucas.ribeiro@greenmaquinas.com.br",
+    "telefone": "95 99148-4260",
     "dias": 30
   },
   {
     "nome": "Phillip Antonic Persaud",
-    "funcao": "",
+    "funcao": "Consultor Técnico",
+    "email": "phillip.persaud@greenmaquinas.com.br",
+    "telefone": "95 98118-0020",
     "dias": 30
   },
   {
-    "nome": "Rayan Dos Santos Mendes",
-    "funcao": "",
+    "nome": "Anderson Lucas Duarte Freitas",
+    "funcao": "Auxiliar Técnico",
+    "email": "",
+    "telefone": "95 99177-5931",
     "dias": 30
   },
   {
-    "nome": "Rayan Dos Santos Mendes",
-    "funcao": "",
+    "nome": "Dhone Francisco da Silva",
+    "funcao": "Auxiliar Técnico",
+    "email": "",
+    "telefone": "95 99123-5350",
+    "dias": 30
+  },
+  {
+    "nome": "Gabriel Sousa Vieira",
+    "funcao": "Auxiliar Técnico",
+    "email": "",
+    "telefone": "95 99134-7940",
+    "dias": 30
+  },
+  {
+    "nome": "Jaime da Silva Coelho",
+    "funcao": "Auxiliar Técnico",
+    "email": "",
+    "telefone": "95 99117-1895",
+    "dias": 30
+  },
+  {
+    "nome": "José Augusto Barbosa Neto",
+    "funcao": "Auxiliar Técnico",
+    "email": "",
+    "telefone": "92 99444-3161",
+    "dias": 30
+  },
+  {
+    "nome": "Kaio Gabriel Carrera de Oliveira",
+    "funcao": "Auxiliar Técnico",
+    "email": "",
+    "telefone": "95 99126-3073",
+    "dias": 30
+  },
+  {
+    "nome": "Bruno Caik da Silva Thome",
+    "funcao": "Auxiliar Técnico",
+    "email": "",
+    "telefone": "46 99106-8471",
+    "dias": 30
+  },
+  {
+    "nome": "Antonio Carlos Caetano",
+    "funcao": "Gerente de Serviço",
+    "email": "gerservicos.boavista@greenmaquinas.com.br",
+    "telefone": "95 98102-0022",
     "dias": 30
   },
   {
     "nome": "Rocio Del Pino Diaz",
-    "funcao": "",
+    "funcao": "Analista Administrativo",
+    "email": "servicos.boavista@greenmaquinas.com.br",
+    "telefone": "95 98125-1111",
     "dias": 30
   },
   {
-    "nome": "Rocio Del Pino Diaz",
-    "funcao": "",
+    "nome": "Rayan Dos Santos Mendes",
+    "funcao": "Consultor Administrativo",
+    "email": "servicos5.boavista@greenmaquinas.com.br",
+    "telefone": "95 99113-5551",
+    "dias": 30
+  },
+  {
+    "nome": "Leonardo Winícios Simões dos Santos",
+    "funcao": "Assistente Administrativo",
+    "email": "servicos3.boavista@greenmaquinas.com.br",
+    "telefone": "95 99162-8353",
+    "dias": 30
+  },
+  {
+    "nome": "Marinilson Mota de Lira",
+    "funcao": "Supervisor Técnico",
+    "email": "marinilson.lira@greenmaquinas.com.br",
+    "telefone": "95 98105-1222",
     "dias": 30
   }
 ]
