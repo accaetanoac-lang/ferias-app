@@ -146,7 +146,8 @@ def gerar_insights(df: pd.DataFrame) -> dict:
 # =========================
 
 import supabase_client as _supa
-_USE_SUPA = _supa._get("USE_SUPABASE", "true").lower() in ("true", "1", "yes")
+# Ativa Supabase sempre que o cliente conseguir conectar (ignora USE_SUPABASE)
+_USE_SUPA = _supa._client() is not None
 
 
 def admin_tem_senha():
@@ -558,7 +559,7 @@ if MODO_IS_FORM:
     render_modo_form()
     st.stop()
 
-st.info(f"Banco em uso: {DB_PATH}")
+st.info(f"Banco em uso: {'Supabase ☁️' if _USE_SUPA else DB_PATH}")
 
 st.sidebar.caption("Colaboradores: data/colaboradores.json (sem Excel em runtime)")
 
