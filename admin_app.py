@@ -498,6 +498,27 @@ def render_modo_form() -> None:
     st.markdown(f"### 👤 {colab['nome']}")
     st.caption(f"Função: {colab.get('funcao', '')} · Dias: {colab.get('dias_disponiveis', 30)}")
 
+    st.markdown(
+        """
+        <div style="
+            background-color: #fff3cd;
+            border-left: 6px solid #ff9800;
+            border-radius: 6px;
+            padding: 14px 18px;
+            margin: 16px 0;
+        ">
+            <span style="font-size: 20px;">⚠️</span>
+            <strong style="font-size: 15px; color: #7a4f00;"> Período permitido para férias:</strong><br>
+            <span style="font-size: 14px; color: #5a3a00;">
+                De <strong>01 de junho a 15 de julho</strong>
+                &nbsp;e&nbsp;
+                De <strong>01 de setembro a 30 de março</strong>
+            </span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
     tipo = st.radio(
         "Como deseja dividir suas férias?",
         [
