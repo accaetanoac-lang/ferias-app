@@ -12,16 +12,19 @@ Schema real das tabelas no Supabase:
 """
 import os
 
-try:
-    import streamlit as st
-    _secrets = st.secrets
-except Exception:
-    _secrets = {}
-
-
 # Valores padrão não-secretos
 _DEFAULT_URL = "https://sutecqkxvpufcptwsbac.supabase.co"
 _DEFAULT_PUBLIC_URL = "https://ferias-green.streamlit.app"
+
+
+def _get_streamlit_secret(key: str) -> str:
+    """Lê st.secrets em tempo real (não no import) para suportar Streamlit Cloud."""
+    try:
+        import streamlit as st
+        v = st.secrets.get(key, "")
+        return str(v) if v else ""
+    except Exception:
+        return ""
 
 
 def _load_local_config() -> dict:
@@ -63,13 +66,10 @@ def _get(key: str, default: str = "") -> str:
     val = os.getenv(key, "")
     if val:
         return val
-    # 2. Streamlit secrets
-    try:
-        v = _secrets.get(key, "")
-        if v:
-            return str(v)
-    except Exception:
-        pass
+    # 2. Streamlit secrets (lido em tempo real a cada chamada)
+    v = _get_streamlit_secret(key)
+    if v:
+        return v
     # 3. Arquivo local (.streamlit/secrets.toml ou .env)
     if key in _local_cfg:
         return _local_cfg[key]
