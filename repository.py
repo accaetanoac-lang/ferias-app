@@ -25,6 +25,11 @@ def _use_supabase() -> bool:
     # Padrão: usa Supabase sempre que o cliente conseguir conectar
     return supabase_client._client() is not None
 
+# USE_SUPABASE é avaliado dinamicamente a cada chamada para suportar
+# o Streamlit Cloud onde st.secrets só fica disponível após o boot
+def _supa_ativo() -> bool:
+    return supabase_client._client() is not None
+
 USE_SUPABASE = _use_supabase()
 
 
@@ -119,17 +124,37 @@ def criar_colaborador(nome, funcao, dias):
 
 
 def listar_colaboradores():
+    if _supa_ativo():
+        rows = supabase_client.select("colaboradores")
+        return [
+            (
+                r.get("id"),
+                r.get("nome", ""),
+                r.get("funcao") or r.get("cargo", ""),
+                r.get("dias_disponiveis", 30),
+            )
+            for r in rows
+        ]
     conn = database.get_conn()
     c = conn.cursor()
-
     c.execute("SELECT id, nome, funcao, dias_disponiveis FROM colaboradores")
     data = c.fetchall()
-
     conn.close()
     return data
 
 
 def buscar_colaborador(colaborador_id):
+    if _supa_ativo():
+        rows = supabase_client.select("colaboradores", f"&id=eq.{colaborador_id}")
+        if rows:
+            r = rows[0]
+            return (
+                r.get("id"),
+                r.get("nome", ""),
+                r.get("funcao") or r.get("cargo", ""),
+                r.get("dias_disponiveis", 30),
+            )
+        return None
     conn = database.get_conn()
     c = conn.cursor()
     c.execute(
