@@ -193,12 +193,24 @@ def buscar_colaborador_por_nome(nome):
 
 
 def salvar_solicitacao(colaborador_id, tipo, periodos):
-    conn = database.get_conn()
-    c = conn.cursor()
-
     p1 = periodos[0]
     p2 = periodos[1] if len(periodos) > 1 else None
 
+    if _supa_ativo():
+        data = {
+            "colaborador_id": colaborador_id,
+            "tipo": tipo,
+            "data_inicio_1": p1["inicio"],
+            "data_fim_1": p1["fim"],
+            "data_inicio_2": p2["inicio"] if p2 else None,
+            "data_fim_2": p2["fim"] if p2 else None,
+            "status": "PENDENTE",
+        }
+        supabase_client.insert("solicitacoes", data)
+        return
+
+    conn = database.get_conn()
+    c = conn.cursor()
     c.execute(
         """
         INSERT INTO solicitacoes (
@@ -221,12 +233,20 @@ def salvar_solicitacao(colaborador_id, tipo, periodos):
             p2["fim"] if p2 else None,
         ),
     )
-
     conn.commit()
     conn.close()
 
 
 def atualizar_status_solicitacao(solicitacao_id, status, aprovado_por):
+    import datetime
+    hoje = datetime.date.today().isoformat()
+    if _supa_ativo():
+        supabase_client.update(
+            "solicitacoes",
+            {"status": status, "aprovado_por": aprovado_por, "data_aprovacao": hoje},
+            f"&id=eq.{solicitacao_id}",
+        )
+        return
     conn = database.get_conn()
     c = conn.cursor()
     c.execute(
@@ -242,10 +262,44 @@ def atualizar_status_solicitacao(solicitacao_id, status, aprovado_por):
 
 
 def listar_solicitacoes_com_status():
-    """Consulta direta ao SQLite (sem @st.cache_data); sempre dados atuais."""
+    """Retorna todas as solicitações com nome e função do colaborador."""
+    if _supa_ativo():
+        solicitacoes = supabase_client.select("solicitacoes")
+        if not isinstance(solicitacoes, list):
+            solicitacoes = []
+        if not solicitacoes:
+            return []
+        # Buscar colaboradores para fazer o JOIN manual
+        colaboradores = supabase_client.select("colaboradores")
+        colab_map = {}
+        if isinstance(colaboradores, list):
+            for c in colaboradores:
+                colab_map[c["id"]] = c
+        dados = []
+        for s in solicitacoes:
+            cid = s.get("colaborador_id")
+            colab = colab_map.get(cid, {})
+            dados.append({
+                "id": s.get("id"),
+                "nome": colab.get("nome", ""),
+                "funcao": colab.get("funcao") or colab.get("cargo", ""),
+                "tipo": s.get("tipo"),
+                "data_inicio_1": s.get("data_inicio_1"),
+                "data_fim_1": s.get("data_fim_1"),
+                "data_inicio_2": s.get("data_inicio_2"),
+                "data_fim_2": s.get("data_fim_2"),
+                "status": s.get("status", "PENDENTE"),
+                "aprovado_por": s.get("aprovado_por"),
+                "data_aprovacao": s.get("data_aprovacao"),
+                "criado_em": s.get("criado_em"),
+            })
+        # Ordenar por criado_em desc
+        dados.sort(key=lambda x: x.get("criado_em") or "", reverse=True)
+        return dados
+
+    # Fallback SQLite
     conn = database.get_conn()
     c = conn.cursor()
-
     c.execute(
         """
         SELECT
@@ -266,10 +320,8 @@ def listar_solicitacoes_com_status():
         ORDER BY s.criado_em DESC
         """
     )
-
     colunas = [desc[0] for desc in c.description]
     dados = [dict(zip(colunas, row)) for row in c.fetchall()]
-
     conn.close()
     return dados
 
@@ -279,10 +331,26 @@ def listar_solicitacoes():
 
 
 def listar_colaboradores_sem_programacao():
-    """LEFT JOIN sem cache; após INSERT em solicitacoes, o colaborador some da lista."""
+    """Retorna colaboradores que ainda não têm solicitação de férias."""
+    if _supa_ativo():
+        colaboradores = supabase_client.select("colaboradores")
+        solicitacoes = supabase_client.select("solicitacoes")
+        if not isinstance(colaboradores, list):
+            colaboradores = []
+        if not isinstance(solicitacoes, list):
+            solicitacoes = []
+        ids_com_ferias = {s.get("colaborador_id") for s in solicitacoes}
+        sem_programacao = [
+            (c["id"], c["nome"])
+            for c in colaboradores
+            if c["id"] not in ids_com_ferias
+        ]
+        sem_programacao.sort(key=lambda x: x[1])
+        return sem_programacao
+
+    # Fallback SQLite
     conn = database.get_conn()
     c = conn.cursor()
-
     c.execute(
         """
         SELECT c.id, c.nome
@@ -292,7 +360,6 @@ def listar_colaboradores_sem_programacao():
         ORDER BY c.nome
         """
     )
-
     data = c.fetchall()
     conn.close()
     return data

@@ -146,12 +146,13 @@ def gerar_insights(df: pd.DataFrame) -> dict:
 # =========================
 
 import supabase_client as _supa
-# Ativa Supabase sempre que o cliente conseguir conectar (ignora USE_SUPABASE)
-_USE_SUPA = _supa._client() is not None
+# Avalia em tempo real (não no import) para suportar Streamlit Cloud
+def _USE_SUPA() -> bool:
+    return _supa._client() is not None
 
 
 def admin_tem_senha():
-    if _USE_SUPA:
+    if _USE_SUPA():
         rows = _supa.select("admin_senha")
         return bool(rows and (rows[0].get("senha_hash") or rows[0].get("hash")))
     conn = get_conn()
@@ -162,7 +163,7 @@ def admin_tem_senha():
 
 def definir_senha_admin(senha: str):
     senha_hash = bcrypt.hashpw(senha.encode(), bcrypt.gensalt()).decode()
-    if _USE_SUPA:
+    if _USE_SUPA():
         _supa.delete("admin_senha", "&id=neq.0")
         _supa.insert("admin_senha", {"senha_hash": senha_hash})
         return
@@ -174,7 +175,7 @@ def definir_senha_admin(senha: str):
 
 
 def verificar_senha_admin(senha: str):
-    if _USE_SUPA:
+    if _USE_SUPA():
         rows = _supa.select("admin_senha")
         if not rows:
             return False
@@ -196,7 +197,7 @@ def verificar_senha_admin(senha: str):
 
 def gerar_token(colab_id):
     token = str(uuid.uuid4())
-    if _USE_SUPA:
+    if _USE_SUPA():
         _supa.insert("tokens", {
             "colaborador_id": colab_id,
             "token": token,
@@ -215,7 +216,7 @@ def gerar_token(colab_id):
 
 
 def validar_token(token):
-    if _USE_SUPA:
+    if _USE_SUPA():
         rows = _supa.select("tokens", f"&token=eq.{token}")
         if rows and not rows[0].get("revogado"):
             return rows[0].get("colaborador_id")
@@ -285,6 +286,74 @@ def gerar_qrcode(url: str):
 def _inserir_solicitacao_ferias(
     colab_id: int, colab: dict, periodos: List[Tuple[date, date]]
 ) -> bool:
+    """Valida conflitos e registra a solicitação. Usa Supabase quando disponível."""
+    if _USE_SUPA():
+        # Verificar conflito via Supabase (tabela solicitacoes)
+        existentes = _supa.select("solicitacoes", f"&colaborador_id=eq.{colab_id}")
+        if not isinstance(existentes, list):
+            existentes = []
+        for di, df in periodos:
+            for s in existentes:
+                s_ini = s.get("data_inicio_1")
+                s_fim = s.get("data_fim_1")
+                if s_ini and s_fim:
+                    try:
+                        from datetime import date as _date
+                        si = _date.fromisoformat(str(s_ini)[:10])
+                        sf = _date.fromisoformat(str(s_fim)[:10])
+                        if di <= sf and df >= si:
+                            st.error("Já existe férias nesse período")
+                            return False
+                    except Exception:
+                        pass
+                # Verificar também período 2
+                s_ini2 = s.get("data_inicio_2")
+                s_fim2 = s.get("data_fim_2")
+                if s_ini2 and s_fim2:
+                    try:
+                        si2 = _date.fromisoformat(str(s_ini2)[:10])
+                        sf2 = _date.fromisoformat(str(s_fim2)[:10])
+                        if di <= sf2 and df >= si2:
+                            st.error("Já existe férias nesse período")
+                            return False
+                    except Exception:
+                        pass
+        # Verificar conflito de função via Supabase
+        todas_solic = _supa.select("solicitacoes")
+        colaboradores_supa = _supa.select("colaboradores")
+        if not isinstance(todas_solic, list):
+            todas_solic = []
+        if not isinstance(colaboradores_supa, list):
+            colaboradores_supa = []
+        colab_map_supa = {c["id"]: c for c in colaboradores_supa}
+        funcao_colab = colab.get("funcao", "")
+        for di, df in periodos:
+            mesma_funcao_no_periodo = 0
+            for s in todas_solic:
+                if s.get("colaborador_id") == colab_id:
+                    continue
+                if str(s.get("status", "")).upper() not in ("PENDENTE", "APROVADO", ""):
+                    continue
+                outro_colab = colab_map_supa.get(s.get("colaborador_id"), {})
+                funcao_outro = outro_colab.get("funcao") or outro_colab.get("cargo", "")
+                if funcao_outro != funcao_colab:
+                    continue
+                s_ini = s.get("data_inicio_1")
+                s_fim = s.get("data_fim_1")
+                if s_ini and s_fim:
+                    try:
+                        si = _date.fromisoformat(str(s_ini)[:10])
+                        sf = _date.fromisoformat(str(s_fim)[:10])
+                        if di <= sf and df >= si:
+                            mesma_funcao_no_periodo += 1
+                    except Exception:
+                        pass
+            if mesma_funcao_no_periodo >= 2:
+                st.error("Já existem 2 colaboradores dessa função em férias nesse período")
+                return False
+        return True
+
+    # Fallback SQLite
     conn = get_conn()
     try:
         for di, df in periodos:
@@ -298,22 +367,18 @@ def _inserir_solicitacao_ferias(
                 """,
                 (colab_id, str(df), str(di)),
             )
-
             if cur.fetchone():
                 st.error("Já existe férias nesse período")
                 return False
-
             erro_funcao = ferias.validar_conflito_funcao(
                 conn,
                 colab["funcao"],
                 di,
                 df,
             )
-
             if erro_funcao:
                 st.error(erro_funcao)
                 return False
-
             conn.execute(
                 """
                 INSERT INTO ferias
@@ -328,7 +393,6 @@ def _inserir_solicitacao_ferias(
                     "PENDENTE",
                 ),
             )
-
         conn.commit()
     except Exception as e:
         conn.rollback()
@@ -336,8 +400,7 @@ def _inserir_solicitacao_ferias(
         return False
     finally:
         conn.close()
-
-    return True
+    return TrueTrue
 
 
 def _data_fim_e_retorno(data_inicio: date, dias: int) -> Tuple[date, date]:
@@ -580,7 +643,7 @@ if MODO_IS_FORM:
     render_modo_form()
     st.stop()
 
-st.info(f"Banco em uso: {'Supabase ☁️' if _USE_SUPA else DB_PATH}")
+st.info(f"Banco em uso: {'Supabase ☁️' if _USE_SUPA() else DB_PATH}")
 
 st.sidebar.caption("Colaboradores: data/colaboradores.json (sem Excel em runtime)")
 
