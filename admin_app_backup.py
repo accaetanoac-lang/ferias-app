@@ -337,9 +337,10 @@ if token:
                 st.error(msg)
                 st.stop()
 
-            if not validar_janela(data_inicio):
-                st.error("Fora da janela")
-                st.stop()
+            # Validação de janela removida (sem limite de data)
+# if not validar_janela(data_inicio):
+#     st.error("Fora da janela")
+#     st.stop()
 
             saldo_restante = get_saldo_restante(colab_id)
             if dias > saldo_restante:
