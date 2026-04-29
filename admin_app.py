@@ -1,3 +1,5 @@
+st.error("🔥 VERSÃO NOVA CARREGADA 🔥")
+
 import sys
 import os
 
