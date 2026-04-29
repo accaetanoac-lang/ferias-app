@@ -105,13 +105,12 @@ def validar_ferias_sem_saldo(
     if err_inicio:
         return err_inicio
 
-    inicio_j, fim_j = get_janela_ferias()
-
-    if data_inicio < inicio_j:
-        return f"Início permitido após {inicio_j}"
-
-    if data_inicio > fim_j:
-        return f"Fora da janela ({inicio_j} a {fim_j})"
+   # Janela de férias desativada (sem limite de data)
+# inicio_j, fim_j = get_janela_ferias()
+# if data_inicio < inicio_j:
+#     return f"Início permitido após {inicio_j}"
+# if data_inicio > fim_j:
+#     return f"Fora da janela ({inicio_j} a {fim_j})"
 
     return None
 
